@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Turn-in code {{ ticket.code }} · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page">
+  <div class="panel turn-in-panel">
+    <span class="eyebrow">Find-IT turn-in code</span>
+    <h1>{{ ticket.code }}</h1>
+    <p class="muted">This code belongs to a {{ post.get_post_type_display|lower }} item{% if post.category %} ({{ post.category.name|lower }}){% endif %} on Find-IT.</p>
+    {% if post.status == "TURNED_OVER" %}
+      <div class="form-callout guardhouse-callout"><strong>Already at the guard house</strong><span>The main-campus guard house has received this item.</span></div>
+    {% elif post.status == "CLAIMED" or post.status == "CLOSED" %}
+      <div class="form-callout warning-callout"><strong>This listing is {{ post.get_status_display|lower }}</strong><span>It no longer needs to be turned in.</span></div>
+    {% else %}
+      <div class="form-callout"><strong>Bringing it to the guard house?</strong><span>Take the item to the main-campus guard house and show this code or QR. Guard-house staff will confirm it.</span></div>
+    {% endif %}
+    <div class="button-row"><a class="button button-soft" href="{% url 'post-detail' post.pk %}">Open the post</a></div>
+    <p class="fine-print">Guard-house staff: sign in with your staff account and open this link again to confirm the turn-in.</p>
+  </div>
+</section>
+{% endblock %}

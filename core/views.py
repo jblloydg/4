@@ -483,10 +483,16 @@ def lost_guardhouse_view(request, conversation_id):
     return redirect("chat-room", conversation_id=conversation.pk)
 
 
+def _turn_in_url(request, ticket):
+    from django.conf import settings as django_settings
+    path = reverse("turn-in", args=[ticket.code])
+    base = getattr(django_settings, "FINDIT_SITE_URL", "")
+    return f"{base}{path}" if base else request.build_absolute_uri(path)
+
+
 def _qr_svg(request, ticket):
     import segno
-    url = request.build_absolute_uri(reverse("turn-in", args=[ticket.code]))
-    return segno.make(url, error="m").svg_inline(scale=4, dark="#17344f", light="#ffffff")
+    return segno.make(_turn_in_url(request, ticket), error="m").svg_inline(scale=4, dark="#17344f", light="#ffffff")
 
 
 @login_required
@@ -498,7 +504,7 @@ def ticket_qr(request, code):
     import segno
     import io
     buffer = io.BytesIO()
-    segno.make(request.build_absolute_uri(reverse("turn-in", args=[ticket.code])), error="m").save(
+    segno.make(_turn_in_url(request, ticket), error="m").save(
         buffer, kind="svg", scale=8, dark="#17344f", border=4,
     )
     response = HttpResponse(buffer.getvalue(), content_type="image/svg+xml")
@@ -513,15 +519,24 @@ def staff_scan(request):
     return render(request, "core/staff_scan.html")
 
 
-@login_required
 def turn_in_view(request, code):
-    """Where a scanned QR (or a typed code) lands: one-tap 'Confirm turned in'."""
-    if not is_staff_or_admin(request.user):
-        return HttpResponseForbidden("Only guard-house staff can confirm a turn-in.")
+    """Where a scanned QR (or a typed code) lands.
+
+    The QR is a plain link anyone can open. Non-staff (and signed-out people)
+    only see a basic info page. Signed-in staff/admin also get the one-tap
+    'Confirm turned in' prompt; the server re-checks their role on every confirm.
+    """
+    is_staff_user = request.user.is_authenticated and is_staff_or_admin(request.user)
     ticket = TurnInTicket.objects.select_related("post", "post__category", "finder").filter(code=code.strip().upper()).first()
     if ticket is None:
-        return render(request, "core/turn_in_confirm.html", {"code": code.strip().upper(), "ticket": None}, status=404)
+        return render(request, "core/turn_in_confirm.html", {
+            "code": code.strip().upper(), "ticket": None, "is_staff_user": is_staff_user,
+        }, status=404)
     post = ticket.post
+    if not is_staff_user:
+        if request.method == "POST":
+            return HttpResponseForbidden("Only signed-in guard-house staff can confirm a turn-in.")
+        return render(request, "core/turn_in_public.html", {"ticket": ticket, "post": post})
     if request.method == "POST":
         method = GuardhouseIntake.Method.QR if request.POST.get("via") == "qr" else GuardhouseIntake.Method.CODE
         handed_user = ticket.finder if request.POST.get("handed_over_by") != "other" else None

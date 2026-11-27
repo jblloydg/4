@@ -120,6 +120,10 @@ CAPTCHA_TIMEOUT = 10  # minutes
 CAPTCHA_IMAGE_SIZE = (150, 50)
 CAPTCHA_FONT_SIZE = 30
 
+# Address put inside turn-in QR codes, e.g. http://192.168.1.20:8000 on a campus Wi-Fi demo
+# or https://findit.example.edu when hosted. Blank = the address the finder's browser used.
+FINDIT_SITE_URL = os.getenv("FINDIT_SITE_URL", "").rstrip("/")
+
 # Backups (see core/backups.py and HANDOFF.md).
 BACKUP_DIR = Path(os.getenv("FINDIT_BACKUP_DIR", str(BASE_DIR / "backups")))
 BACKUP_KEEP_DAYS = int(os.getenv("FINDIT_BACKUP_KEEP_DAYS", "14"))

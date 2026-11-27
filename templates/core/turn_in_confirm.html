@@ -2,13 +2,13 @@
 {% block title %}Turn-in {{ code }} · Find-IT{% endblock %}
 {% block content %}
 <section class="narrow-page">
-  <a class="back-link" href="{% url 'staff-scan' %}">← Scan another</a>
+  {% if is_staff_user or ticket %}<a class="back-link" href="{% url 'staff-scan' %}">← Scan another</a>{% endif %}
   {% if not ticket %}
   <div class="panel turn-in-panel not-found">
     <span class="eyebrow">Turn-in code {{ code }}</span>
     <h1>Not in the database</h1>
     <p class="muted">No Find-IT post uses this code. Check the code with the person, or record the item as a walk-in.</p>
-    <div class="button-row"><a class="button button-primary" href="{% url 'walk-in' %}">Record a walk-in item</a><a class="button button-outline" href="{% url 'staff-scan' %}">Scan again</a></div>
+    {% if is_staff_user %}<div class="button-row"><a class="button button-primary" href="{% url 'walk-in' %}">Record a walk-in item</a><a class="button button-outline" href="{% url 'staff-scan' %}">Scan again</a></div>{% endif %}
   </div>
   {% else %}
   <div class="panel turn-in-panel">
