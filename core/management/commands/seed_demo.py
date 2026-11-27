@@ -1,27 +1,59 @@
-from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
-from django.utils import timezone
+"""Fictional local demo data. Never deploy with demo data enabled.
 
-from core.models import Comment, ItemPost, PostStatusEvent, Profile, VerificationQuestion
+Creates demo accounts plus example listings that show every feature:
+shared FOUND post with approved / submitted / declined claims, a LOST post
+with an owner verification in progress (answered question cards), an item
+at the guard house with a pending finder status request, and a walk-in item.
+Photos are simple generated pictures, not real photos.
+"""
+import io
+
+from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
+from django.core.management.base import BaseCommand
+from django.db import transaction
+from django.utils import timezone
+from PIL import Image, ImageDraw
+
+from core.models import (
+    Category, ClaimAnswer, ClaimApplication, Comment, Conversation, GuardhouseIntake, ItemPost, PostPhoto,
+    PostShare, PostStatusEvent, Profile, QuestionTemplate, StatusChangeRequest,
+)
+from core.services import (
+    answer_chat_question, apply_post_questions, approve_claim, ask_chat_questions, create_claim_conversation,
+    create_lost_post_conversation, decline_claim, record_status, turn_over_to_guardhouse,
+)
 
 User = get_user_model()
 
+ACCOUNTS = [
+    ("2026-0001", "Alex Finder", Profile.Role.STUDENT, "DemoFindIt!2026"),
+    ("2026-0002", "Jamie Claimant", Profile.Role.STUDENT, "DemoFindIt!2026"),
+    ("2026-0003", "Sam Second", Profile.Role.STUDENT, "DemoFindIt!2026"),
+    ("2026-0004", "Riley Third", Profile.Role.STUDENT, "DemoFindIt!2026"),
+    ("security.demo", "Campus Staff", Profile.Role.STAFF, "DemoStaff!2026"),
+    ("findit-admin", "Find-IT Admin", Profile.Role.ADMIN, "DemoAdmin!2026"),
+]
+
+
+def demo_photo(label, color):
+    """A plain generated picture (no real photo)."""
+    image = Image.new("RGB", (640, 480), (236, 242, 245))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((170, 90, 470, 390), radius=48, fill=color)
+    draw.text((24, 440), f"Demo picture: {label}", fill=(23, 52, 79))
+    buffer = io.BytesIO()
+    image.save(buffer, "JPEG", quality=80)
+    return ContentFile(buffer.getvalue(), name=f"demo-{label.lower().replace(' ', '-')}.jpg")
+
 
 class Command(BaseCommand):
-    help = "Create fictional local demo accounts. Do not use these credentials online."
+    help = "Create fictional local demo accounts and example listings. Do not use these credentials online."
 
     def handle(self, *args, **options):
-        accounts = [
-            ("2026-0001", "Alex Finder", Profile.Role.STUDENT, "DemoFindIt!2026"),
-            ("2026-0002", "Jamie Claimant", Profile.Role.STUDENT, "DemoFindIt!2026"),
-            ("security.demo", "Campus Staff", Profile.Role.STAFF, "DemoStaff!2026"),
-            ("findit-admin", "Find-IT Admin", Profile.Role.ADMIN, "DemoAdmin!2026"),
-        ]
-        for username, name, role, password in accounts:
-            user, created = User.objects.get_or_create(
-                username=username,
-                defaults={"first_name": name},
-            )
+        users = {}
+        for username, name, role, password in ACCOUNTS:
+            user, created = User.objects.get_or_create(username=username, defaults={"first_name": name})
             if created:
                 user.set_password(password)
                 user.save(update_fields=["password"])
@@ -34,56 +66,108 @@ class Command(BaseCommand):
                 user.is_superuser = True
                 user.save(update_fields=["is_staff", "is_superuser"])
             profile.save()
+            users[username] = User.objects.select_related("profile").get(pk=user.pk)
             self.stdout.write(f"{'Created' if created else 'Ready'} demo account: {username} ({role})")
-        finder = User.objects.get(username="2026-0001")
-        found_post, found_created = ItemPost.objects.get_or_create(
-            author=finder,
-            title="Blue insulated bottle",
-            defaults={
-                "post_type": ItemPost.Type.FOUND,
-                "description": "Reusable bottle with a matte blue exterior and a silver-colored lid. The owner should know a few details not shown in this broad description.",
-                "approximate_date": timezone.localdate(),
-            },
-        )
-        if found_created:
-            PostStatusEvent.objects.create(
-                post=found_post,
-                previous_status="",
-                new_status=found_post.status,
-                actor=finder,
-                note="Demo found listing created.",
-            )
-        questions = [
-            "What color or mark is on the underside?",
-            "What detail is on the inside of the lid?",
-            "Describe one small mark that is not in this listing.",
-            "What did you usually carry with this bottle?",
-            "What is one detail about its cap or seal?",
-        ]
-        for order, text in enumerate(questions, start=1):
-            VerificationQuestion.objects.get_or_create(post=found_post, order=order, defaults={"text": text})
-        lost_post, lost_created = ItemPost.objects.get_or_create(
-            author=User.objects.get(username="2026-0002"),
-            title="Black folding umbrella",
-            defaults={
-                "post_type": ItemPost.Type.LOST,
-                "description": "Compact black folding umbrella with a curved handle. If you found something similar, message the poster privately.",
-                "approximate_date": timezone.localdate(),
-            },
-        )
-        if lost_created:
-            PostStatusEvent.objects.create(
-                post=lost_post,
-                previous_status="",
-                new_status=lost_post.status,
-                actor=lost_post.author,
-                note="Demo lost listing created.",
-            )
-        Comment.objects.get_or_create(
-            post=found_post,
-            author=User.objects.get(username="security.demo"),
-            text="Keep your verification details private and arrange hand-off within school premises.",
-        )
+
+        alex, jamie, sam, riley = (users[k] for k in ("2026-0001", "2026-0002", "2026-0003", "2026-0004"))
+        staff = users["security.demo"]
+        with transaction.atomic():
+            self._shared_found_post(alex, jamie, sam, riley, staff)
+            self._lost_post_verification(alex, jamie)
+            self._guardhouse_item(alex, sam, staff)
+            self._walk_in(staff)
         self.stdout.write(self.style.WARNING(
             "Fictional accounts and example listings are for a local demo only. Never deploy with demo data enabled."
         ))
+
+    # -- helpers -----------------------------------------------------------
+    def _post(self, author, title, post_type, category_name, description, color):
+        post, created = ItemPost.objects.get_or_create(
+            author=author, title=title,
+            defaults={
+                "post_type": post_type,
+                "category": Category.objects.filter(name=category_name).first(),
+                "description": description,
+                "approximate_date": timezone.localdate(),
+            },
+        )
+        if created:
+            PostPhoto.objects.create(post=post, image=demo_photo(title, color), order=1)
+            PostStatusEvent.objects.create(post=post, previous_status="", new_status=post.status, actor=author, note="Demo listing created.")
+        return post, created
+
+    def _claim(self, post, claimant, description):
+        claim = ClaimApplication.objects.create(post=post, claimant=claimant, description=description)
+        for question in post.verification_questions.all():
+            answer = question.choices[0] if question.choices else "A demo answer only the owner would know"
+            ClaimAnswer.objects.create(claim=claim, question=question, answer_text=answer)
+        create_claim_conversation(claim)
+        if post.status == ItemPost.Status.OPEN:
+            record_status(post, ItemPost.Status.CLAIM_IN_PROGRESS, claimant, "A private claim was submitted.", claim)
+        return claim
+
+    # -- scenarios ---------------------------------------------------------
+    def _shared_found_post(self, alex, jamie, sam, riley, staff):
+        post, created = self._post(
+            alex, "Blue insulated bottle", ItemPost.Type.FOUND, "Water bottles & tumblers",
+            "Reusable bottle with a matte blue exterior and a silver-colored lid.", (52, 104, 170),
+        )
+        if not created:
+            return
+        picks = list(QuestionTemplate.objects.filter(text__in=[
+            "What kind of lid does it have?", "Describe any stickers or dents on it.",
+        ]))
+        apply_post_questions(post, picks)
+        for user in (alex, jamie):
+            PostShare.objects.get_or_create(post=post, user=user)
+        ItemPost.objects.filter(pk=post.pk).update(is_shared=True, shared_at=timezone.now())
+        first = self._claim(post, jamie, "Blue bottle with a dent near the bottom and a cat sticker under the lid.")
+        approve_claim(first, alex)
+        self._claim(post, sam, "I lost a blue bottle in the library last week.")
+        third = self._claim(post, riley, "It's my bottle.")
+        decline_claim(third, alex, "The lid and sticker details didn't match.")
+        Comment.objects.get_or_create(
+            post=post, author=staff,
+            text="Keep your verification details private and arrange hand-off within school premises.",
+        )
+
+    def _lost_post_verification(self, alex, jamie):
+        post, created = self._post(
+            jamie, "Black folding umbrella", ItemPost.Type.LOST, "Umbrellas",
+            "Compact black folding umbrella with a curved handle.", (40, 40, 48),
+        )
+        if not created:
+            return
+        conversation = create_lost_post_conversation(post, alex)
+        templates = list(QuestionTemplate.objects.filter(is_default=True)[:3])
+        for question in ask_chat_questions(conversation, alex, templates):
+            answer = question.choices[0] if question.choices else "A small white tag on the strap"
+            answer_chat_question(question, jamie, answer)
+
+    def _guardhouse_item(self, alex, sam, staff):
+        post, created = self._post(
+            alex, "Gray earbuds case", ItemPost.Type.FOUND, "Electronics & gadgets",
+            "Small gray earbuds charging case.", (120, 126, 134),
+        )
+        if not created:
+            return
+        apply_post_questions(post, [])
+        self._claim(post, sam, "Gray case with a scratch on the hinge.")
+        ticket = post.turn_in_tickets.get(finder=alex)
+        ticket.requested_at = timezone.now()
+        ticket.save(update_fields=["requested_at"])
+        turn_over_to_guardhouse(post, staff, ticket=ticket, handed_over_by_user=alex, method=GuardhouseIntake.Method.QR)
+        StatusChangeRequest.objects.create(
+            post=post, requester=alex, requested_status=StatusChangeRequest.Requested.OPEN,
+            reason="Demo request: the owner contacted me directly, I'd like to return it myself.",
+        )
+
+    def _walk_in(self, staff):
+        post, created = self._post(
+            staff, "Scientific calculator", ItemPost.Type.FOUND, "School supplies",
+            "Handed in at the guard house.", (30, 30, 30),
+        )
+        if not created:
+            return
+        apply_post_questions(post, [])
+        turn_over_to_guardhouse(post, staff, handed_over_by_name="Walk-in visitor (demo)", method=GuardhouseIntake.Method.WALK_IN)
