@@ -1,8 +1,21 @@
 {% extends "core/base.html" %}
+{% load static %}
 {% block title %}{{ post.display_title }} · Find-IT{% endblock %}
 {% block content %}
 <section class="page-wrap detail-page">
   <a class="back-link" href="{% if user.is_authenticated %}{% url 'home' %}{% else %}{% url 'landing' %}{% endif %}">← Back to listings</a>
+  {% if post.is_resolved %}
+  <div class="closed-banner" role="status"><strong>This listing is {{ post.get_status_display|lower }}.</strong><span>{% if post.status == "CLAIMED" %}The item was returned to its owner.{% else %}{{ post.closed_reason|default:"It was closed by its author or staff." }}{% endif %} The post stays visible for reference, but claims, comments and new chats are closed.</span></div>
+  <div class="modal-backdrop is-open" id="closed-modal" data-closed-modal>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="closed-modal-title">
+      <button type="button" class="modal-close" data-close-closed aria-label="Close">×</button>
+      <span class="eyebrow">Listing {{ post.get_status_display|lower }}</span>
+      <h2 id="closed-modal-title">This item is no longer active</h2>
+      <p class="muted">{% if post.status == "CLAIMED" %}It has already been returned to its owner.{% else %}It was closed{% if post.closed_reason %}: “{{ post.closed_reason }}”{% endif %}.{% endif %} You can still view the photos and details.</p>
+      <button type="button" class="button button-primary button-full" data-close-closed>View the post</button>
+    </section>
+  </div>
+  {% endif %}
   {% if post.is_archived %}<div class="archive-banner"><strong>Archived listing</strong><span>This post is hidden from active search. Its history and conversations are retained.</span></div>{% endif %}
   <div class="detail-layout">
     <article class="detail-main">
@@ -117,6 +130,20 @@
           <form method="post" action="{% url 'remove-post' post.pk %}">{% csrf_token %}<button class="text-action" type="submit">Remove from active listings</button></form>
         {% endif %}
       </div>
+      <div class="panel share-panel" id="share-panel">
+        <span class="eyebrow">Share</span>
+        <div class="share-stats">
+          {% if shared_by_author %}<span class="subtle-chip">Shared by author</span>{% endif %}
+          <span class="subtle-chip" id="share-count">Shared by {{ share_count }} {% if share_count == 1 %}person{% else %}people{% endif %}</span>
+        </div>
+        {% if user.is_authenticated %}
+          <form method="post" action="{% url 'share-post' post.pk %}" data-share-form data-share-url="{{ direct_link }}">{% csrf_token %}<button class="button button-outline button-full" type="submit">Copy link</button></form>
+          <input class="share-link" type="text" value="{{ direct_link }}" readonly aria-label="Post link" hidden>
+          <p class="fine-print">{% if post.is_shared %}This post is public: anyone with the link can view it without signing in.{% else %}Copying the link makes this post viewable without signing in. This can't be undone; it lasts until the post is permanently deleted.{% endif %}</p>
+        {% else %}
+          <button class="button button-outline button-full" type="button" data-login-next="{{ request.path }}">Sign in to share</button>
+        {% endif %}
+      </div>
       {% if applications %}
       <div class="panel application-panel">
         <span class="eyebrow">Private review</span><h3>{% if post.post_type == "LOST" %}Owner verifications{% else %}Claim applications{% endif %}</h3>
@@ -158,5 +185,21 @@
       {% endif %}
     </aside>
   </div>
+  {% if panel_conversation %}
+  <button type="button" class="chat-launcher" data-chat-toggle aria-controls="chat-panel">💬 Chat{% if not panel_can_send %} (read-only){% endif %}</button>
+  <aside class="chat-panel" id="chat-panel" hidden data-panel-id="{{ panel_conversation.pk }}" aria-label="Chat with {% if post.post_type == 'FOUND' %}the finder{% else %}the owner{% endif %}">
+    <header class="chat-panel-head"><strong>{% if post.post_type == "FOUND" %}Chat with the finder{% else %}Chat with the owner{% endif %}</strong>
+      <div><a class="text-action" href="{% url 'chat-room' panel_conversation.pk %}">Full chat</a><button type="button" class="modal-close" data-chat-toggle aria-label="Hide chat">×</button></div></header>
+    <div class="chat-messages panel-messages" id="chat-messages" data-conversation="{{ panel_conversation.pk }}" data-can-send="{{ panel_can_send|yesno:'true,false' }}">
+      {% for message in panel_messages %}
+      <article class="chat-message {% if message.sender_id == user.pk %}mine{% endif %}" data-message-id="{{ message.pk }}"><div class="message-bubble"><div class="message-meta"><strong>{{ message.sender.first_name|default:message.sender.username }}</strong><time>{{ message.sent_at|date:"M j · g:i a" }}</time></div><p>{{ message.text|linebreaksbr }}</p></div></article>
+      {% empty %}<div class="chat-empty"><p>No messages yet. Questions and answers appear in the full chat.</p></div>{% endfor %}
+    </div>
+    {% if panel_can_send %}
+    <form class="chat-composer" id="chat-form"><label for="chat-input" class="sr-only">Message</label><textarea id="chat-input" rows="2" maxlength="2000" placeholder="Write a message…" required></textarea><button class="button button-primary button-small" type="submit">Send</button></form>
+    {% else %}<div class="chat-readonly">This chat is read-only. Its history stays visible.</div>{% endif %}
+  </aside>
+  {% endif %}
 </section>
 {% endblock %}
+{% block scripts %}{% if panel_conversation %}<script src="{% static 'js/chat.js' %}" defer></script>{% endif %}{% endblock %}

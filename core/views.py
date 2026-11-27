@@ -20,7 +20,7 @@ from .forms import (
 )
 from .models import (
     AbuseReport, Category, ClaimAnswer, ClaimApplication, Comment, Conversation,
-    ChatQuestion, InAppNotification, ItemPost, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
+    ChatQuestion, InAppNotification, ItemPost, PostShare, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
     SystemSettings, VerificationQuestion,
 )
 from .permissions import is_admin, is_staff_or_admin, role_of
@@ -134,6 +134,10 @@ def post_detail(request, post_id):
     )
     if not _can_view_archived(post, request.user):
         raise Http404
+    if not request.user.is_authenticated and not post.is_shared:
+        # Not shared yet: the link only works for signed-in users.
+        from urllib.parse import quote
+        return redirect(f"{reverse('login')}?next={quote(request.get_full_path())}")
 
     resume = request.GET.get("resume", "")
     if request.user.is_authenticated and resume == "message" and request.user.pk != post.author_id:
@@ -177,6 +181,12 @@ def post_detail(request, post_id):
     for application in applications:
         application.can_decide = can_decide_claim(request.user, application)
         application.rank = application.approval_rank
+    panel_conversation = None
+    if request.user.is_authenticated and request.user.pk != post.author_id:
+        if post.post_type == ItemPost.Type.FOUND and latest_claim is not None:
+            panel_conversation = getattr(latest_claim, "conversation", None)
+        elif post.post_type == ItemPost.Type.LOST:
+            panel_conversation = post.conversations.filter(initiator=request.user).first()
     if can_moderate and post.status == ItemPost.Status.TURNED_OVER:
         account_list = User.objects.filter(profile__role=Profile.Role.STUDENT, is_active=True).order_by("first_name")
     context = {
@@ -194,7 +204,15 @@ def post_detail(request, post_id):
         "applications": applications,
         "account_list": account_list,
         "resume": resume,
-        "direct_link": request.build_absolute_uri(),
+        "direct_link": request.build_absolute_uri(reverse("post-detail", args=[post.pk])),
+        "shared_by_author": post.shares.filter(user_id=post.author_id).exists(),
+        "share_count": post.shares.count(),
+        "panel_conversation": panel_conversation,
+        "panel_messages": list(panel_conversation.messages.select_related("sender").order_by("-sent_at")[:50])[::-1] if panel_conversation else [],
+        "panel_can_send": bool(
+            panel_conversation and panel_conversation.includes(request.user)
+            and not panel_conversation.is_closed and not panel_conversation.is_paused
+        ),
     }
     return render(request, "core/post_detail.html", context)
 
@@ -876,3 +894,22 @@ def answer_question_view(request, question_id):
         question.refresh_from_db()
         return JsonResponse({"ok": question.is_answered, "answer": question.answer_text})
     return redirect(f"{reverse('chat-room', args=[question.conversation_id])}#question-{question.pk}")
+
+
+@login_required
+@require_POST
+def share_post(request, post_id):
+    """Copy link: turns on public (signed-out) viewing for this post, permanently."""
+    post = get_object_or_404(ItemPost, pk=post_id)
+    PostShare.objects.get_or_create(post=post, user=request.user)
+    if not post.is_shared:
+        ItemPost.objects.filter(pk=post.pk, is_shared=False).update(is_shared=True, shared_at=timezone.now())
+    link = request.build_absolute_uri(reverse("post-detail", args=[post.pk]))
+    if request.headers.get("x-requested-with") == "fetch":
+        return JsonResponse({
+            "url": link,
+            "shared_by_author": post.shares.filter(user_id=post.author_id).exists(),
+            "share_count": post.shares.count(),
+        })
+    messages.success(request, f"Link ready to share: {link}")
+    return redirect("post-detail", post_id=post.pk)

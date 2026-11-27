@@ -75,6 +75,12 @@ class ItemPost(models.Model):
     closed_reason = models.CharField(max_length=240, blank=True)
     is_archived = models.BooleanField(default=False)
     archived_at = models.DateTimeField(null=True, blank=True)
+    is_shared = models.BooleanField(
+        default=False,
+        help_text="Turned on the first time someone signed in presses Copy link. Shared posts are viewable "
+                  "without signing in until the post is permanently deleted.",
+    )
+    shared_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -83,6 +89,10 @@ class ItemPost(models.Model):
 
     def __str__(self):
         return self.display_title
+
+    @property
+    def is_resolved(self):
+        return self.status in {self.Status.CLAIMED, self.Status.CLOSED}
 
     @property
     def display_title(self):
@@ -111,6 +121,16 @@ class ItemPost(models.Model):
     @property
     def author_name(self):
         return self.author.get_full_name() or self.author.username
+
+
+class PostShare(models.Model):
+    """Who pressed Copy link on a post (one row per person)."""
+    post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="shares")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="post_shares")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["post", "user"], name="unique_post_share")]
 
 
 class PostPhoto(models.Model):

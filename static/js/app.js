@@ -212,6 +212,56 @@ document.addEventListener("DOMContentLoaded", function () {
     sync();
   });
 
+  var params0 = new URLSearchParams(window.location.search);
+  // Copy link (share mode). Server marks the post as shared, then the link is copied.
+  document.querySelectorAll("[data-share-form]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (!window.fetch) return;
+      event.preventDefault();
+      var url = form.getAttribute("data-share-url");
+      var linkBox = form.parentNode.querySelector(".share-link");
+      fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin", headers: { "x-requested-with": "fetch" } })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          url = data.url || url;
+          var count = document.getElementById("share-count");
+          if (count) count.textContent = "Shared by " + data.share_count + (data.share_count === 1 ? " person" : " people");
+          var done = function () { var b = form.querySelector("button"); if (b) { b.textContent = "Link copied"; b.disabled = false; } };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(url).then(done, function () { if (linkBox) { linkBox.hidden = false; linkBox.select(); } });
+          } else if (linkBox) { linkBox.hidden = false; linkBox.select(); done(); }
+          form.removeAttribute("data-submitting");
+          var key = form.querySelector("input[name='idempotency_key']");
+          if (key) key.value = oneTimeKey();
+        })
+        .catch(function () { form.submit(); });
+    });
+  });
+
+  // Closed-listing pop-up.
+  document.querySelectorAll("[data-close-closed]").forEach(function (btn) {
+    btn.addEventListener("click", function () { var m = document.getElementById("closed-modal"); if (m) m.classList.remove("is-open"); });
+  });
+
+  // Messenger-style chat panel: show/hide at any time; remembers its state per chat.
+  var chatPanel = document.getElementById("chat-panel");
+  if (chatPanel) {
+    var stateKey = "findit-chat-open-" + chatPanel.getAttribute("data-panel-id");
+    var launcher = document.querySelector(".chat-launcher");
+    var setOpen = function (open) {
+      chatPanel.hidden = !open;
+      if (launcher) launcher.hidden = open;
+      try { window.localStorage.setItem(stateKey, open ? "1" : "0"); } catch (e) {}
+      if (open) { var msgs = document.getElementById("chat-messages"); if (msgs) msgs.scrollTop = msgs.scrollHeight; }
+    };
+    document.querySelectorAll("[data-chat-toggle]").forEach(function (btn) {
+      btn.addEventListener("click", function () { setOpen(chatPanel.hidden); });
+    });
+    var remembered = null;
+    try { remembered = window.localStorage.getItem(stateKey); } catch (e) {}
+    if (remembered === "1" || params0.get("chat") === "open") setOpen(true);
+  }
+
   var params = new URLSearchParams(window.location.search);
   if (params.get("resume") === "claim") {
     var claim = document.getElementById("claim-form");

@@ -13,6 +13,7 @@ urlpatterns = [
     path("posts/<uuid:post_id>/edit/", views.edit_post, name="edit-post"),
     path("posts/<uuid:post_id>/claim/", views.submit_claim, name="submit-claim"),
     path("posts/<uuid:post_id>/comment/", views.add_comment, name="add-comment"),
+    path("posts/<uuid:post_id>/share/", views.share_post, name="share-post"),
     path("posts/<uuid:post_id>/turn-over/", views.turnover_view, name="turnover"),
     path("posts/<uuid:post_id>/returned/", views.returned_view, name="returned"),
     path("posts/<uuid:post_id>/claimed/", views.claimed_view, name="claimed"),
