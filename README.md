@@ -6,13 +6,17 @@ The local demo uses fictional accounts and a local SQLite database. It does not 
 
 ## What is included
 
-- Public direct links to post details, with sign-in required for posting, claims, comments, and messages.
-- Lost and found posts, search, broad optional photos, public comments, and private found-item claim questions.
-- Five finder-written ownership questions for each found item. Claim answers are visible only to the finder and authorized staff.
-- Live in-app chat using WebSockets, with messages retained alongside their post.
+- Share mode: a post becomes viewable without signing in only after someone signed in presses **Copy link**. Posting, claims, comments, messages and sharing always require sign-in.
+- Lost and found posts with a required, admin-managed category and 1-20 photos (title and description optional). Posts above 10 photos need a randomized captcha; new posts per hour are limited (admin setting).
+- Ownership questions picked from an admin-managed question bank (3-5 per found post; defaults fill the minimum) plus a required claimant description. Answers are visible only to the finder and authorized staff.
+- Approve / decline claims with an approval order, optional decline reason, one re-application, and in-chat question cards (also used to verify owners on LOST posts).
+- Guard house: private turn-in QR per found post, staff Scan page with an offline queue, intake records, walk-in items, and finder status requests.
+- Live in-app chat using WebSockets (also as a show/hide panel on the post page), messages retained alongside their post.
+- Duplicate-submit protection on every form, daily backups with command-line restore, and an automated test suite.
 - Student, staff, and administrator workflows, status history, notifications, staff chat review, and administrator reports.
-- A local timer runner for seven-day claim inactivity. Guard-house grace and archived-post deletion timers are configurable by an administrator and disabled by default.
 - Responsive pages styled to match the navy and teal Padlet wireframes.
+
+See **HANDOFF.md** for what changed from the starter, setup steps, and how to try each feature.
 
 ## Run locally on Windows
 
@@ -32,10 +36,9 @@ The local demo uses fictional accounts and a local SQLite database. It does not 
    pip install -r requirements.txt
    ~~~
 
-5. Create the local database tables and fictional demo accounts:
+5. Create the local database tables and fictional demo accounts (the migrations are already in the repository; do not run makemigrations):
 
    ~~~powershell
-   python manage.py makemigrations core
    python manage.py migrate
    python manage.py seed_demo
    ~~~
@@ -62,6 +65,8 @@ Stop the website with Ctrl+C; the local timer process stops with it.
 | --- | --- | --- |
 | Student / finder | 2026-0001 | DemoFindIt!2026 |
 | Student / claimant | 2026-0002 | DemoFindIt!2026 |
+| Student / second claimant | 2026-0003 | DemoFindIt!2026 |
+| Student / declined claimant | 2026-0004 | DemoFindIt!2026 |
 | Staff | security.demo | DemoStaff!2026 |
 | Administrator | findit-admin | DemoAdmin!2026 |
 
@@ -77,13 +82,15 @@ To create a separate administrator account, run **python manage.py createsuperus
 - **/posts/new/** — create a lost or found post
 - **/my-posts/** and **/my-claims/** — personal listing and claim history
 - **/staff/** — staff review and moderation workspace
+- **/staff/scan/** — guard-house QR scanner; **/staff/walk-in/** — record a walk-in item
+- **/staff/categories/** and **/staff/questions/** — administrator-managed categories and question bank
 - **/django-admin/** — Django model administration for administrators
 
 ## Status and privacy behavior
 
-- A new found post is **Open for Claim**. The first valid application changes it to **Claim in Progress**.
-- The finder can record **Returned** to one claimant. That claimant confirms receipt; confirmation completes and archives the item as **Claimed**.
-- Finder or authorized staff can record **At Guard House**. This closes existing online claims, makes their chats read-only, and sends each claimant a status-only notice. New online claims are disabled while the item is there.
+- A new found post is **Open for Claim**. The first claim changes it to **Claim in Progress**.
+- Claims are **Submitted**, then **Approved** or **Declined** by the finder or staff. Several claims can be approved; the finder records **Returned** to any approved claimant, who confirms receipt (**Claimed**). Claims with seven days of inactivity expire.
+- The finder says they are bringing an item to the guard house; it becomes **At Guard House** only when staff confirm receipt (QR scan, typed code, or the post page). Claims and chats stay open for the administrator's guard-house grace days; while the item is there the finder sends status requests instead of changing the status.
 - An author, staff member, or administrator can close or remove a listing. Removal hides it from active browse but preserves chat and claim history.
 - Administrators can set an optional guard-house grace period and optional archive auto-delete period. Blank settings mean disabled. Permanent deletion removes the post, photo, claims, and chats together. Posts connected to a pending safety report are retained until the report is resolved.
 - Authorized staff can read any chat for safety review, pause it, and send a report to an administrator. Administrators decide account restrictions. Staff reviews and moderation actions are recorded.
@@ -104,7 +111,7 @@ The Figma file remains the editable visual source. The repository includes the o
 - [Entity relationship diagram](docs/reference/erd.png)
 - [Padlet 5 system-design document](docs/reference/system-design.docx)
 
-The first local setup generates the initial **core** database migration. Keep that generated migration in source control; later installs and hosted releases should run **python manage.py migrate** without regenerating migrations.
+All database migrations are kept in source control (core/migrations). Installs and hosted releases run **python manage.py migrate**; never regenerate migrations on a server.
 
 ## License
 
