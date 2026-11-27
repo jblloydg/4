@@ -3,18 +3,19 @@
 {% block content %}
 <section class="page-wrap">
   <div class="page-heading"><div><span class="eyebrow">Private applications</span><h1>My claims</h1><p class="muted">Only you, the finder, and authorized staff can see your claim information.</p></div></div>
-  <div class="listing-list">
-    {% for claim in claims %}
-    <article class="listing-row">
-      <div class="listing-thumb">{% with cover=claim.post.cover_photo %}{% if cover %}<img src="{{ cover.image.url }}" alt="">{% else %}<span>◈</span>{% endif %}{% endwith %}</div>
-      <div class="listing-info"><div class="card-meta"><span class="type-pill type-found">Found item</span><span class="status-dot">{{ claim.get_status_display }}</span><span class="subtle-chip">{{ claim.post.get_status_display }}</span></div><h3><a href="{% url 'post-detail' claim.post.pk %}">{{ claim.post.display_title }}</a></h3><p>Posted by {{ claim.post.author.first_name|default:claim.post.author.username }}</p><small>Applied {{ claim.submitted_at|date:"M j, Y" }}</small></div>
-      <div class="listing-actions">
-        {% if claim.status == "SUBMITTED" or claim.status == "RETURNED" %}{% if claim.conversation %}<a class="button button-soft button-small" href="{% url 'chat-room' claim.conversation.pk %}">Open chat</a>{% endif %}{% endif %}
-        {% if claim.status == "RETURNED" %}<form method="post" action="{% url 'claimed' claim.post.pk %}">{% csrf_token %}<button class="button button-primary button-small" type="submit">Confirm received</button></form>{% endif %}
-        {% if claim.status == "SUBMITTED" or claim.status == "RETURNED" %}<form method="post" action="{% url 'close-claim' claim.pk %}">{% csrf_token %}<button class="text-action" type="submit">Close claim</button></form>{% endif %}
-      </div>
-    </article>
-    {% empty %}<div class="empty-state"><div class="empty-icon">✓</div><h3>No claims yet</h3><p>When you apply for a found item, its private status will appear here.</p><a class="button button-soft" href="{% url 'home' %}">Browse listings</a></div>{% endfor %}
-  </div>
+
+  {% if not active and not declined and not history %}
+  <div class="empty-state"><div class="empty-icon">✓</div><h3>No claims yet</h3><p>When you apply for a found item, or a finder verifies you on your lost post, it appears here.</p><a class="button button-soft" href="{% url 'home' %}">Browse listings</a></div>
+  {% endif %}
+
+  {% if active %}<h2 class="list-section-title">Active</h2>
+  <div class="listing-list">{% for claim in active %}{% include "core/_claim_row.html" %}{% endfor %}</div>{% endif %}
+
+  {% if declined %}<h2 class="list-section-title">Declined</h2>
+  <p class="muted list-section-help">You can re-apply once for each declined item.</p>
+  <div class="listing-list">{% for claim in declined %}{% include "core/_claim_row.html" %}{% endfor %}</div>{% endif %}
+
+  {% if history %}<h2 class="list-section-title">History</h2>
+  <div class="listing-list">{% for claim in history %}{% include "core/_claim_row.html" %}{% endfor %}</div>{% endif %}
 </section>
 {% endblock %}

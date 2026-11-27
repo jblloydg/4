@@ -1,0 +1,23 @@
+<article class="listing-row">
+  <div class="listing-thumb">{% with cover=claim.post.cover_photo %}{% if cover %}<img src="{{ cover.image.url }}" alt="">{% else %}<span>◈</span>{% endif %}{% endwith %}</div>
+  <div class="listing-info">
+    <div class="card-meta">
+      <span class="type-pill type-{{ claim.post.post_type|lower }}">{% if claim.is_lost_report %}Your lost item{% else %}Found item{% endif %}</span>
+      <span class="status-dot">{{ claim.get_status_display }}{% if claim.rank %} · #{{ claim.rank }} approved{% endif %}</span>
+      <span class="subtle-chip">{{ claim.post.get_status_display }}</span>
+    </div>
+    <h3><a href="{% url 'post-detail' claim.post.pk %}">{{ claim.post.display_title }}</a></h3>
+    <p>{% if claim.is_lost_report %}Finder: {{ claim.finder.first_name|default:claim.finder.username }}{% else %}Posted by {{ claim.post.author.first_name|default:claim.post.author.username }}{% endif %}</p>
+    {% if claim.status == "DECLINED" and claim.decline_reason %}<p class="decline-reason">Reason: {{ claim.decline_reason }}</p>{% endif %}
+    <small>Applied {{ claim.submitted_at|date:"M j, Y" }}{% if claim.reapply_of_id %} · re-application{% endif %}</small>
+  </div>
+  <div class="listing-actions">
+    {% if claim.conversation %}<a class="button button-soft button-small" href="{% url 'chat-room' claim.conversation.pk %}">{% if claim.is_open %}Open chat{% else %}View chat{% endif %}</a>{% endif %}
+    {% if claim.status == "RETURNED" %}<form method="post" action="{% url 'claimed' claim.post.pk %}">{% csrf_token %}<button class="button button-primary button-small" type="submit">Confirm received</button></form>{% endif %}
+    {% if claim.status == "DECLINED" and claim.can_reapply %}
+      {% if claim.is_lost_report %}<form method="post" action="{% url 'reverify' claim.conversation.pk %}">{% csrf_token %}<button class="button button-primary button-small" type="submit">Ask to be verified again (1 left)</button></form>
+      {% else %}<a class="button button-primary button-small" href="{% url 'post-detail' claim.post.pk %}?resume=claim#claim-form">Re-apply (1 left)</a>{% endif %}
+    {% elif claim.status == "DECLINED" %}<span class="subtle-chip">No re-applications left</span>{% endif %}
+    {% if claim.is_open and not claim.is_lost_report %}<form method="post" action="{% url 'close-claim' claim.pk %}">{% csrf_token %}<button class="text-action" type="submit">Withdraw</button></form>{% endif %}
+  </div>
+</article>

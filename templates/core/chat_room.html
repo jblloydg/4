@@ -10,14 +10,65 @@
       <div><span class="eyebrow">Private Find-IT chat</span><h1>{{ conversation.post.display_title }}</h1><p class="muted">{% if staff_view %}Staff review view · Participants: {{ conversation.initiator.first_name|default:conversation.initiator.username }} and {{ conversation.recipient.first_name|default:conversation.recipient.username }}{% else %}{{ conversation.initiator.first_name|default:conversation.initiator.username }} ↔ {{ conversation.recipient.first_name|default:conversation.recipient.username }}{% endif %}</p></div>
       {% if conversation.is_paused %}<span class="status-pill status-closed">Paused for review</span>{% elif conversation.is_closed %}<span class="status-pill status-closed">Read-only</span>{% endif %}
     </header>
+    {% if claim %}
+    <div class="claim-strip">
+      <span class="status-pill status-{{ claim.status|lower }}">{% if claim.is_lost_report %}Owner verification · {% endif %}{{ claim.get_status_display }}{% if claim_rank %} · #{{ claim_rank }} approved{% endif %}</span>
+      {% if claim.status == "DECLINED" and claim.decline_reason %}<span class="muted">Reason: {{ claim.decline_reason }}</span>{% endif %}
+      {% if can_decide and claim.status == "SUBMITTED" %}
+        <form method="post" action="{% url 'approve-claim' claim.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="button button-primary button-small" type="submit"{% if not lost_ready %} disabled title="Send at least 3 questions and wait for all answers"{% endif %}>Approve</button></form>
+      {% endif %}
+      {% if can_decide and claim.status == "SUBMITTED" or can_decide and claim.status == "APPROVED" %}
+        <details class="inline-decline"><summary class="button button-outline button-small">Decline</summary>
+          <form method="post" action="{% url 'decline-claim' claim.pk %}" class="stack-form compact-form">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><label>Reason (optional, the claimant will see it)<textarea name="reason" rows="2" maxlength="500"></textarea></label><button class="button button-danger button-small" type="submit">Decline claim</button></form>
+        </details>
+      {% endif %}
+      {% if claim.is_lost_report and claim.status == "APPROVED" and user.pk == claim.finder_id and conversation.post.status != "RETURNED" and conversation.post.status != "TURNED_OVER" %}
+        <form method="post" action="{% url 'returned' conversation.post.pk %}">{% csrf_token %}<input type="hidden" name="claim_id" value="{{ claim.pk }}"><button class="button button-soft button-small" type="submit">Mark returned to owner</button></form>
+      {% endif %}
+      {% if claim.is_lost_report and claim.status == "RETURNED" and user.pk == claim.claimant_id %}
+        <form method="post" action="{% url 'claimed' conversation.post.pk %}">{% csrf_token %}<button class="button button-primary button-small" type="submit">Confirm I received it</button></form>
+      {% endif %}
+      {% if can_reverify %}
+        <form method="post" action="{% url 'reverify' conversation.pk %}">{% csrf_token %}<button class="button button-soft button-small" type="submit">Ask to be verified again (once)</button></form>
+      {% endif %}
+    </div>
+    {% if claim.is_lost_report and can_decide and claim.status == "SUBMITTED" and not lost_ready %}<p class="fine-print claim-strip-note">Approve unlocks after at least 3 questions are sent and all are answered. Read the answers yourself; nothing is checked automatically.</p>{% endif %}
+    {% endif %}
     {% if conversation.is_paused %}<div class="form-callout warning-callout"><strong>Chat paused</strong><span>{{ conversation.pause_reason|default:"A staff member paused this chat for review." }}</span></div>{% endif %}
     <div class="chat-messages" id="chat-messages" data-conversation="{{ conversation.pk }}" data-can-send="{{ can_send|yesno:'true,false' }}">
       {% for message in chat_messages %}
       <article class="chat-message {% if message.sender_id == user.pk %}mine{% endif %}" data-message-id="{{ message.pk }}">
         <div class="message-bubble"><div class="message-meta"><strong>{{ message.sender.first_name|default:message.sender.username }}</strong><time>{{ message.sent_at|date:"M j · g:i a" }}</time></div><p>{{ message.text|linebreaksbr }}</p></div>
       </article>
-      {% empty %}<div class="chat-empty"><span>✦</span><p>Start with a helpful message. Keep private details in the verification form and meet only within school premises.</p></div>{% endfor %}
+      {% empty %}{% if not questions %}<div class="chat-empty"><span>✦</span><p>Start with a helpful message. Keep private details in the verification form and meet only within school premises.</p></div>{% endif %}{% endfor %}
     </div>
+    <section class="question-cards" id="question-cards" data-answer-url="{% url 'answer-question' 0 %}" data-is-answerer="{{ is_answerer|yesno:'true,false' }}" aria-label="Ownership questions">
+      {% for q in questions %}
+      <article class="question-card{% if q.is_answered %} is-answered{% endif %}" id="question-{{ q.pk }}" data-question-id="{{ q.pk }}">
+        <div class="question-card-head"><span class="question-check" aria-hidden="true">{% if q.is_answered %}✓{% else %}{{ q.order }}{% endif %}</span><strong>{{ q.text }}</strong></div>
+        {% if q.is_answered %}<p class="question-answer">{{ q.answer_text }}</p>
+        {% elif is_answerer and can_send %}
+          <form method="post" action="{% url 'answer-question' q.pk %}" class="question-answer-form">{% csrf_token %}
+            {% if q.answer_type == "CHOICE" and q.choices %}<select name="answer" required><option value="">Choose an answer</option>{% for c in q.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+            {% else %}<textarea name="answer" rows="2" maxlength="1200" required placeholder="Your private answer"></textarea>{% endif %}
+            <button class="button button-primary button-small" type="submit">Answer</button>
+          </form>
+        {% else %}<p class="muted question-waiting">Waiting for an answer…</p>{% endif %}
+      </article>
+      {% endfor %}
+    </section>
+    {% if question_bank %}
+    <details class="question-ask" id="question-ask"><summary class="button button-soft button-small">＋ Questions ({{ questions_left }} left)</summary>
+      <form method="post" action="{% url 'ask-questions' conversation.pk %}" class="stack-form">{% csrf_token %}
+        <p class="fine-print">Pick questions to send as answer cards. You judge the answers yourself. {% if conversation.post.post_type == "LOST" %}At least 3 answered questions are needed before you can approve the owner.{% endif %}</p>
+        <label class="search-field question-search"><span aria-hidden="true">⌕</span><input type="search" class="question-filter" placeholder="Search questions" aria-label="Search questions"></label>
+        <div class="question-list chat-question-list" data-max="{{ questions_left }}">
+          {% for t in question_bank %}<label class="question-option" data-categories="{% for c in t.categories.all %}{{ c.pk }} {% endfor %}" data-general="{{ t.is_general|yesno:'1,0' }}"><input type="checkbox" name="questions" value="{{ t.pk }}"><span><strong>{{ t.text }}</strong><small>{{ t.get_answer_type_display }}</small></span></label>{% endfor %}
+        </div>
+        <button class="button button-primary button-small" type="submit">Send questions</button>
+      </form>
+    </details>
+    {% endif %}
     {% if can_send %}
     <form class="chat-composer" id="chat-form"><label for="chat-input" class="sr-only">Message</label><textarea id="chat-input" rows="2" maxlength="2000" placeholder="Write a message…" required></textarea><button class="button button-primary" type="submit">Send</button></form>
     <p class="chat-privacy">Messages are private to the participants. Authorized staff can review chats for safety.</p>
@@ -38,5 +89,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-{% if can_send %}<script src="{% static 'js/chat.js' %}" defer></script>{% endif %}
+<script src="{% static 'js/chat.js' %}" defer></script>
 {% endblock %}

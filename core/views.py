@@ -20,13 +20,15 @@ from .forms import (
 )
 from .models import (
     AbuseReport, Category, ClaimAnswer, ClaimApplication, Comment, Conversation,
-    InAppNotification, ItemPost, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
+    ChatQuestion, InAppNotification, ItemPost, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
     SystemSettings, VerificationQuestion,
 )
 from .permissions import is_admin, is_staff_or_admin, role_of
 from .services import (
     archive_post, audit, close_claim, close_post, confirm_claimed,
-    apply_post_questions, create_claim_conversation, create_lost_post_conversation, notify_user, record_status,
+    answer_chat_question, apply_post_questions, approve_claim, ask_chat_questions, can_decide_claim,
+    chat_questions_ready, chat_roles, claim_counts, create_claim_conversation, create_lost_post_conversation,
+    current_round_questions, decline_claim, notify_user, reapply_status, record_status, reopen_lost_report,
     return_to_claimant, turn_over_to_guardhouse,
 )
 
@@ -117,10 +119,7 @@ def _conversation_for_post(post, user):
     }:
         return None
     if post.post_type == ItemPost.Type.FOUND:
-        claim = post.claims.filter(
-            claimant=user,
-            status__in=[ClaimApplication.Status.SUBMITTED, ClaimApplication.Status.RETURNED],
-        ).first()
+        claim = post.claims.filter(claimant=user, status__in=ClaimApplication.ACTIVE_STATUSES).first()
         if claim:
             try:
                 return claim.conversation
@@ -145,16 +144,19 @@ def post_detail(request, post_id):
 
     comments = post.comments.filter(moderation_status=Comment.Moderation.VISIBLE).select_related("author")
     user_claim = None
+    latest_claim = None
     claim_form = None
+    reapply_from = None
     if request.user.is_authenticated and post.post_type == ItemPost.Type.FOUND:
-        user_claim = post.claims.filter(
-            claimant=request.user,
-            status__in=[ClaimApplication.Status.SUBMITTED, ClaimApplication.Status.RETURNED],
-        ).first()
+        mine = post.claims.filter(claimant=request.user).order_by("-submitted_at")
+        user_claim = mine.filter(status__in=ClaimApplication.ACTIVE_STATUSES).first()
+        latest_claim = user_claim or mine.first()
         if post.can_accept_claims and request.user.pk != post.author_id and not user_claim:
-            saved = request.session.get("claim_form_data") or {}
-            data = saved.get("data") if saved.get("post") == str(post.pk) else None
-            claim_form = ClaimAnswerForm(data, questions=post.verification_questions.all())
+            can_apply, reapply_from = reapply_status(post, request.user)
+            if can_apply:
+                saved = request.session.get("claim_form_data") or {}
+                data = saved.get("data") if saved.get("post") == str(post.pk) else None
+                claim_form = ClaimAnswerForm(data, questions=post.verification_questions.all())
 
     can_manage = request.user.is_authenticated and (
         request.user.pk == post.author_id or is_staff_or_admin(request.user)
@@ -169,7 +171,12 @@ def post_detail(request, post_id):
     applications = []
     account_list = []
     if can_manage:
-        applications = list(post.claims.select_related("claimant").order_by("-submitted_at"))
+        applications = list(post.claims.select_related("claimant", "finder").order_by("-submitted_at"))
+    elif request.user.is_authenticated and post.post_type == ItemPost.Type.LOST:
+        applications = list(post.claims.filter(finder=request.user).select_related("claimant", "finder"))
+    for application in applications:
+        application.can_decide = can_decide_claim(request.user, application)
+        application.rank = application.approval_rank
     if can_moderate and post.status == ItemPost.Status.TURNED_OVER:
         account_list = User.objects.filter(profile__role=Profile.Role.STUDENT, is_active=True).order_by("first_name")
     context = {
@@ -178,6 +185,9 @@ def post_detail(request, post_id):
         "comment_form": CommentForm() if request.user.is_authenticated else None,
         "claim_form": claim_form,
         "user_claim": user_claim,
+        "latest_claim": latest_claim,
+        "reapply_from": reapply_from,
+        "claim_counts": claim_counts(post),
         "can_manage": can_manage,
         "can_moderate": can_moderate,
         "can_interact": can_interact,
@@ -294,11 +304,12 @@ def submit_claim(request, post_id):
     if not post.can_accept_claims:
         messages.error(request, "This item is not accepting online claims.")
         return redirect("post-detail", post_id=post.pk)
-    if post.claims.filter(
-        claimant=request.user,
-        status__in=[ClaimApplication.Status.SUBMITTED, ClaimApplication.Status.RETURNED],
-    ).exists():
+    if post.claims.filter(claimant=request.user, status__in=ClaimApplication.ACTIVE_STATUSES).exists():
         messages.info(request, "You already have a claim for this item.")
+        return redirect("my-claims")
+    can_apply, reapply_from = reapply_status(post, request.user)
+    if not can_apply:
+        messages.error(request, "You have already used your one re-application for this item.")
         return redirect("my-claims")
 
     questions = list(post.verification_questions.order_by("order"))
@@ -315,6 +326,7 @@ def submit_claim(request, post_id):
     with transaction.atomic():
         claim = ClaimApplication.objects.create(
             post=post, claimant=request.user, description=form.cleaned_data["description"].strip(),
+            reapply_of=reapply_from,
         )
         for question in questions:
             ClaimAnswer.objects.create(
@@ -362,12 +374,22 @@ def my_posts(request):
 
 @login_required
 def my_claims(request):
-    claims = (
+    claims = list(
         ClaimApplication.objects.filter(claimant=request.user)
-        .select_related("post", "post__author", "post__category")
+        .select_related("post", "post__author", "post__category", "finder", "conversation")
         .prefetch_related("post__photos")
     )
-    return render(request, "core/my_claims.html", {"claims": claims})
+    for claim in claims:
+        claim.rank = claim.approval_rank
+        if claim.status == ClaimApplication.Status.DECLINED:
+            can_apply, linked = reapply_status(claim.post, request.user)
+            claim.can_reapply = can_apply and linked is not None and linked.pk == claim.pk and claim.post.can_accept_claims
+            if claim.is_lost_report:
+                claim.can_reapply = not claim.reapply_of_id and not claim.reapplications.exists()
+    active = [c for c in claims if c.status in ClaimApplication.ACTIVE_STATUSES]
+    declined = [c for c in claims if c.status == ClaimApplication.Status.DECLINED]
+    history = [c for c in claims if c not in active and c not in declined]
+    return render(request, "core/my_claims.html", {"active": active, "declined": declined, "history": history})
 
 
 @login_required
@@ -415,18 +437,16 @@ def turnover_view(request, post_id):
 @require_POST
 def returned_view(request, post_id):
     post = get_object_or_404(ItemPost, pk=post_id)
-    if post.author_id != request.user.pk:
+    claim = get_object_or_404(ClaimApplication.objects.select_related("post", "finder"), pk=request.POST.get("claim_id"), post=post)
+    if request.user.pk != claim.finder_user.pk:
         return HttpResponseForbidden("Only the finder can record a return.")
-    claim = get_object_or_404(ClaimApplication, pk=request.POST.get("claim_id"), post=post)
     try:
         return_to_claimant(post, claim, request.user)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-    except PermissionError as exc:
+    except (ValueError, PermissionError) as exc:
         messages.error(request, str(exc))
     else:
         messages.success(request, "Return recorded. The claimant can confirm receipt.")
-    return redirect("staff-dashboard" if is_staff_or_admin(request.user) else "my-posts")
+    return redirect("post-detail", post_id=post.pk)
 
 
 @login_required
@@ -439,11 +459,14 @@ def claimed_view(request, post_id):
     if post.status == ItemPost.Status.TURNED_OVER:
         if not is_staff_or_admin(request.user):
             return HttpResponseForbidden("Only staff can record an in-person guard-house pickup.")
-        claim = None
-        recipient = get_object_or_404(
-            User, pk=request.POST.get("recipient_id"), profile__role=Profile.Role.STUDENT
-        )
         witnessed = True
+        if request.POST.get("claim_id"):
+            claim = get_object_or_404(ClaimApplication, pk=request.POST.get("claim_id"), post=post, status=ClaimApplication.Status.APPROVED)
+        else:
+            claim = None
+            recipient = get_object_or_404(
+                User, pk=request.POST.get("recipient_id"), profile__role=Profile.Role.STUDENT
+            )
     elif not claim:
         messages.error(request, "The finder has not recorded a return for this item.")
         return redirect("post-detail", post_id=post.pk)
@@ -493,11 +516,40 @@ def chat_room(request, conversation_id):
     if is_staff_or_admin(request.user):
         audit(request.user, "reviewed_chat", conversation, "Staff opened private chat history.")
     messages_qs = conversation.messages.select_related("sender").all()
+    asker, answerer = chat_roles(conversation)
+    claim = conversation.claim
+    questions = list(conversation.questions.all())
+    InAppNotification.objects.filter(
+        recipient=request.user, post=conversation.post, is_priority=True, read_at__isnull=True,
+    ).update(read_at=timezone.now())
+    can_send = conversation.includes(request.user) and not conversation.is_closed and not conversation.is_paused
+    is_asker = bool(asker and asker.pk == request.user.pk)
+    is_answerer = bool(answerer and answerer.pk == request.user.pk)
+    question_bank = []
+    round_count = 0
+    if is_asker and can_send and (claim is None or claim.status in {"SUBMITTED", "APPROVED"}):
+        round_count = current_round_questions(conversation).count() if claim else 0
+        if round_count < 5:
+            question_bank = list(QuestionTemplate.objects.filter(is_active=True).prefetch_related("categories"))
+    can_decide = bool(claim and can_decide_claim(request.user, claim))
     return render(request, "core/chat_room.html", {
         "conversation": conversation,
         "chat_messages": messages_qs,
         "staff_view": staff_view,
-        "can_send": conversation.includes(request.user) and not conversation.is_closed and not conversation.is_paused,
+        "can_send": can_send,
+        "questions": questions,
+        "is_asker": is_asker,
+        "is_answerer": is_answerer,
+        "question_bank": question_bank,
+        "questions_left": 5 - round_count,
+        "claim": claim,
+        "claim_rank": claim.approval_rank if claim else None,
+        "can_decide": can_decide,
+        "lost_ready": chat_questions_ready(claim) if claim and claim.is_lost_report else True,
+        "can_reverify": bool(
+            claim and claim.is_lost_report and claim.status == "DECLINED" and request.user.pk == claim.claimant_id
+            and not claim.reapply_of_id and not claim.reapplications.exists()
+        ),
     })
 
 
@@ -732,3 +784,95 @@ def admin_question_edit(request, template_id=None):
         messages.success(request, "Question saved. Posts that already use it keep their original wording.")
         return redirect("admin-questions")
     return render(request, "core/admin_question_edit.html", {"form": form, "template": template})
+
+
+# ---------------------------------------------------------------------------
+# Approve / decline / re-verify / chat questions
+# ---------------------------------------------------------------------------
+
+def _back_to(request, claim):
+    target = request.POST.get("next", "")
+    if target and url_has_allowed_host_and_scheme(target, {request.get_host()}):
+        return redirect(target)
+    return redirect("post-detail", post_id=claim.post_id)
+
+
+@login_required
+@require_POST
+def approve_claim_view(request, claim_id):
+    claim = get_object_or_404(ClaimApplication.objects.select_related("post", "finder"), pk=claim_id)
+    try:
+        approve_claim(claim, request.user)
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, "Claim approved. The claimant was notified of their place in the approval order.")
+    return _back_to(request, claim)
+
+
+@login_required
+@require_POST
+def decline_claim_view(request, claim_id):
+    claim = get_object_or_404(ClaimApplication.objects.select_related("post", "finder"), pk=claim_id)
+    try:
+        decline_claim(claim, request.user, request.POST.get("reason", ""))
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, "Claim declined. Its chat is now read-only.")
+    return _back_to(request, claim)
+
+
+@login_required
+@require_POST
+def reverify_view(request, conversation_id):
+    conversation = get_object_or_404(Conversation, pk=conversation_id)
+    try:
+        reopen_lost_report(conversation, request.user)
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, "You asked the finder to verify you again. This was your one re-application.")
+    return redirect("chat-room", conversation_id=conversation.pk)
+
+
+@login_required
+@require_POST
+def ask_questions_view(request, conversation_id):
+    conversation = get_object_or_404(Conversation.objects.select_related("post", "claim"), pk=conversation_id)
+    ids = [v for v in request.POST.getlist("questions") if v.isdigit()]
+    templates = list(QuestionTemplate.objects.filter(pk__in=ids, is_active=True))
+    if not templates:
+        messages.error(request, "Pick at least one question to send.")
+        return redirect("chat-room", conversation_id=conversation.pk)
+    try:
+        created = ask_chat_questions(conversation, request.user, templates)
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Sent {len(created)} question(s). You'll get a notification when they're answered.")
+    return redirect("chat-room", conversation_id=conversation.pk)
+
+
+@login_required
+@require_POST
+def answer_question_view(request, question_id):
+    question = get_object_or_404(ChatQuestion.objects.select_related("conversation"), pk=question_id)
+    try:
+        answer_chat_question(question, request.user, request.POST.get("answer", ""))
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    if request.headers.get("x-requested-with") == "fetch":
+        question.refresh_from_db()
+        return JsonResponse({"ok": question.is_answered, "answer": question.answer_text})
+    return redirect(f"{reverse('chat-room', args=[question.conversation_id])}#question-{question.pk}")

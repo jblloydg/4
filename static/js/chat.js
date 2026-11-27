@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var panel = document.getElementById("chat-messages");
   var form = document.getElementById("chat-form");
   var input = document.getElementById("chat-input");
-  if (!panel || !form || !input) return;
+  if (!panel) return;
 
   var conversationId = panel.getAttribute("data-conversation");
   var canSend = panel.getAttribute("data-can-send") === "true";
@@ -46,6 +46,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var data;
     try { data = JSON.parse(event.data); } catch (error) { return; }
     if (data.type === "message") addMessage(data);
+    if (data.type === "event" && data.event === "question") refreshQuestions();
     if (data.type === "error") {
       if (connectionText) connectionText.textContent = data.message;
     }
@@ -57,6 +58,30 @@ document.addEventListener("DOMContentLoaded", function () {
     if (connectionText) connectionText.textContent = "Live chat could not connect. Check that the app server is running.";
   });
 
+  function newId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return String(Date.now()) + Math.random().toString(16).slice(2);
+  }
+
+  // Refresh question cards and the claim strip when the other side sends or answers a question.
+  var refreshing = false;
+  function refreshQuestions() {
+    var typing = document.activeElement && document.activeElement.closest && document.activeElement.closest(".question-card");
+    if (refreshing || typing) return;
+    refreshing = true;
+    fetch(window.location.pathname, { credentials: "same-origin" }).then(function (r) { return r.text(); }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      ["question-cards"].forEach(function (id) {
+        var fresh = doc.getElementById(id), current = document.getElementById(id);
+        if (fresh && current) current.innerHTML = fresh.innerHTML;
+      });
+      var freshStrip = doc.querySelector(".claim-strip"), strip = document.querySelector(".claim-strip");
+      if (freshStrip && strip) strip.innerHTML = freshStrip.innerHTML;
+    }).catch(function () {}).then(function () { refreshing = false; });
+  }
+
+  if (!form || !input) return;
+  var pendingId = null;
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     var text = input.value.trim();
@@ -64,8 +89,12 @@ document.addEventListener("DOMContentLoaded", function () {
       if (connectionText && socket.readyState !== WebSocket.OPEN) connectionText.textContent = "Waiting for the live connection…";
       return;
     }
-    socket.send(JSON.stringify({ message: text }));
+    // Same id for an accidental double send of the same text, so the server saves it once.
+    if (!pendingId || form.getAttribute("data-last-text") !== text) pendingId = newId();
+    form.setAttribute("data-last-text", text);
+    socket.send(JSON.stringify({ message: text, client_id: pendingId }));
     input.value = "";
+    pendingId = null;
     input.focus();
   });
 });

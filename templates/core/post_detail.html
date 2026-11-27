@@ -16,6 +16,7 @@
       <div class="detail-heading">
         <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span>{% if post.category %}<span class="subtle-chip">{{ post.category.name }}</span>{% endif %}<span class="status-pill status-{{ post.status|lower }}">{{ post.get_status_display }}</span></div>
         <h1>{{ post.display_title }}</h1>
+        {% if claim_counts.claiming or claim_counts.approved %}<p class="claim-counts"><strong>{{ claim_counts.claiming }}</strong> {% if post.post_type == "LOST" %}verifying{% else %}claiming{% endif %} · <strong>{{ claim_counts.approved }}</strong> approved</p>{% endif %}
         <p class="detail-author">Posted by <strong>{{ post.author.first_name|default:post.author.username }}</strong>{% if post.approximate_date %} · Approx. {{ post.approximate_date|date:"M j, Y" }}{% endif %}</p>
       </div>
       {% if post.description %}<div class="description-panel"><span class="eyebrow">Broad description</span><p>{{ post.description|linebreaksbr }}</p></div>{% endif %}
@@ -26,9 +27,9 @@
       </div>
       {% endif %}
 
-      {% if post.post_type == "FOUND" and post.can_accept_claims and user.is_authenticated and user.pk != post.author_id and not user_claim %}
+      {% if claim_form %}
       <section class="claim-card" id="claim-form">
-        <div><span class="eyebrow">Private ownership check</span><h2>Claim this item</h2><p class="muted">Your answers are visible to the finder and authorized staff, not to other claimants.</p></div>
+        <div><span class="eyebrow">Private ownership check</span><h2>{% if reapply_from %}Re-apply for this item{% else %}Claim this item{% endif %}</h2>{% if reapply_from %}<p class="form-callout warning-callout"><strong>This is your one re-application.</strong><span>If it is declined again you cannot apply for this item a third time.</span></p>{% endif %}<p class="muted">Your answers are visible to the finder and authorized staff, not to other claimants.</p></div>
         <form method="post" action="{% url 'submit-claim' post.pk %}" class="stack-form">
           {% csrf_token %}
           {% for field in claim_form.answer_fields %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endfor %}
@@ -42,16 +43,17 @@
         <span class="eyebrow">In-person pickup</span><h2>Online claims are closed</h2>
         <p class="muted">This item is at the guard house. Ask staff in person; the public post does not reveal the claimant’s identity.</p>
       </section>
-      {% elif user_claim %}
+      {% elif latest_claim %}
       <section class="claim-card">
-        <span class="eyebrow">Your claim</span><h2>{{ user_claim.get_status_display }}</h2>
-        <p class="muted">Your submitted answers are private. The finder and authorized staff can review the form.</p>
-        {% if user_claim.status == "SUBMITTED" %}
-        <div class="button-row"><a class="button button-soft" href="{% url 'chat-room' user_claim.conversation.pk %}">Open private chat</a>
-          <form method="post" action="{% url 'close-claim' user_claim.pk %}">{% csrf_token %}<button class="button button-outline" type="submit">Close my claim</button></form></div>
-        {% elif user_claim.status == "RETURNED" %}
-        <div class="button-row"><form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary" type="submit">Confirm I received it</button></form><form method="post" action="{% url 'close-claim' user_claim.pk %}">{% csrf_token %}<button class="button button-outline" type="submit">Close claim</button></form></div>
-        {% endif %}
+        <span class="eyebrow">Your claim</span><h2>{{ latest_claim.get_status_display }}{% if latest_claim.approval_rank %} · #{{ latest_claim.approval_rank }} approved{% endif %}</h2>
+        {% if latest_claim.status == "APPROVED" %}<p class="muted">You are number {{ latest_claim.approval_rank }} in the approval order. The finder chooses who receives the item; coordinate in the chat.</p>
+        {% elif latest_claim.status == "DECLINED" %}<p class="muted">The finder or staff declined this claim.{% if latest_claim.decline_reason %} Reason: “{{ latest_claim.decline_reason }}”{% endif %}</p>
+        {% else %}<p class="muted">Your answers are private. The finder and authorized staff can review the form.</p>{% endif %}
+        <div class="button-row">
+          {% if latest_claim.conversation %}<button type="button" class="button button-soft" data-chat-toggle>Open chat</button>{% endif %}
+          {% if latest_claim.status == "RETURNED" %}<form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary" type="submit">Confirm I received it</button></form>{% endif %}
+          {% if latest_claim.status == "SUBMITTED" or latest_claim.status == "APPROVED" or latest_claim.status == "RETURNED" %}<form method="post" action="{% url 'close-claim' latest_claim.pk %}">{% csrf_token %}<button class="button button-outline" type="submit">Withdraw my claim</button></form>{% endif %}
+        </div>
       </section>
       {% endif %}
 
@@ -117,20 +119,34 @@
       </div>
       {% if applications %}
       <div class="panel application-panel">
-        <span class="eyebrow">Private review</span><h3>Claim applications</h3>
+        <span class="eyebrow">Private review</span><h3>{% if post.post_type == "LOST" %}Owner verifications{% else %}Claim applications{% endif %}</h3>
+        <p class="fine-print">{{ claim_counts.claiming }} active · {{ claim_counts.approved }} approved. The finder picks which approved claimant receives the item.</p>
         {% for application in applications %}
         <div class="application-row">
-          <div><strong>{{ application.claimant.first_name|default:application.claimant.username }}</strong><small>{{ application.get_status_display }} · {{ application.submitted_at|date:"M j" }}</small></div>
-          <a class="text-action" href="{% url 'claim-review' application.pk %}">View form</a>
-          {% if post.author_id == user.pk and application.status == "SUBMITTED" %}
+          <div><strong>{% if application.rank %}<span class="rank-badge">#{{ application.rank }}</span> {% endif %}{% if application.is_lost_report %}{{ application.finder.first_name|default:application.finder.username }} → owner{% else %}{{ application.claimant.first_name|default:application.claimant.username }}{% endif %}</strong>
+            <small>{{ application.get_status_display }} · {{ application.submitted_at|date:"M j" }}{% if application.reapply_of_id %} · re-application{% endif %}</small>
+            {% if application.decline_reason %}<small>Reason: {{ application.decline_reason }}</small>{% endif %}</div>
+          <div class="application-links">
+            {% if not application.is_lost_report %}<a class="text-action" href="{% url 'claim-review' application.pk %}">View form</a>{% endif %}
+            {% if application.conversation %}<a class="text-action" href="{% url 'chat-room' application.conversation.pk %}">Chat</a>{% endif %}
+          </div>
+          {% if application.can_decide and application.status == "SUBMITTED" and not application.is_lost_report %}
+          <form method="post" action="{% url 'approve-claim' application.pk %}">{% csrf_token %}<button class="button button-small button-primary" type="submit">Approve</button></form>
+          {% endif %}
+          {% if application.can_decide and application.status == "SUBMITTED" or application.can_decide and application.status == "APPROVED" %}
+          <details class="inline-decline"><summary class="text-action">Decline…</summary>
+            <form method="post" action="{% url 'decline-claim' application.pk %}" class="stack-form compact-form">{% csrf_token %}<label>Reason (optional, shown to the claimant)<textarea name="reason" rows="2" maxlength="500"></textarea></label><button class="button button-small button-danger" type="submit">Decline</button></form>
+          </details>
+          {% endif %}
+          {% if application.status == "APPROVED" and user.pk == application.finder_user.pk and post.status != "RETURNED" and post.status != "TURNED_OVER" %}
           <form method="post" action="{% url 'returned' post.pk %}">{% csrf_token %}<input type="hidden" name="claim_id" value="{{ application.pk }}"><button class="button button-small button-soft" type="submit">Mark returned</button></form>
           {% endif %}
-          {% if application.status == "SUBMITTED" and application.conversation %}
-          <a class="text-action" href="{% url 'chat-room' application.conversation.pk %}">Chat</a>
+          {% if can_moderate and post.status == "TURNED_OVER" and application.status == "APPROVED" %}
+          <form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<input type="hidden" name="claim_id" value="{{ application.pk }}"><button class="button button-small button-primary" type="submit">Release at guard house</button></form>
           {% endif %}
-          {% if application.status == "SUBMITTED" or application.status == "RETURNED" %}
+          {% if application.status == "SUBMITTED" or application.status == "APPROVED" or application.status == "RETURNED" %}{% if can_manage %}
           <form method="post" action="{% url 'close-claim' application.pk %}">{% csrf_token %}<button class="text-action" type="submit">Close claim</button></form>
-          {% endif %}
+          {% endif %}{% endif %}
         </div>
         {% endfor %}
       </div>

@@ -21,7 +21,7 @@
       <a href="{% url 'create-post' %}">Create post</a>
       <a href="{% url 'my-posts' %}">My posts</a>
       <a href="{% url 'my-claims' %}">My claims</a>
-      <a href="{% url 'messages' %}">Messages</a>
+      <a href="{% url 'messages' %}" class="nav-messages">Messages{% if priority_message_count %}<span class="priority-count" title="Needs your attention">{{ priority_message_count }}</span>{% endif %}</a>
       <a href="{% url 'notifications' %}" class="nav-notice">Updates{% if unread_notification_count %}<span class="notice-count">{{ unread_notification_count }}</span>{% endif %}</a>
       {% if current_role == "staff" or current_role == "admin" %}<a href="{% url 'staff-dashboard' %}">Staff</a>{% endif %}
       {% if current_role == "admin" %}<a href="{% url 'admin-settings' %}">Admin</a>{% endif %}

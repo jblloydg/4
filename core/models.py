@@ -183,14 +183,35 @@ class VerificationQuestion(models.Model):
 class ClaimApplication(models.Model):
     class Status(models.TextChoices):
         SUBMITTED = "SUBMITTED", "Submitted"
+        APPROVED = "APPROVED", "Approved"
+        DECLINED = "DECLINED", "Declined"
         RETURNED = "RETURNED", "Returned to claimant"
         COMPLETED = "COMPLETED", "Completed"
         CLOSED = "CLOSED", "Closed"
         EXPIRED = "EXPIRED", "Expired"
 
+    ACTIVE_STATUSES = ("SUBMITTED", "APPROVED", "RETURNED")
+    RANKED_STATUSES = ("APPROVED", "RETURNED", "COMPLETED")
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="claims")
     claimant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="claims")
+    finder = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="finder_claims",
+        help_text="LOST posts only: the person who found the item and is verifying the owner.",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_claims"
+    )
+    declined_at = models.DateTimeField(null=True, blank=True)
+    declined_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="declined_claims"
+    )
+    decline_reason = models.CharField(max_length=500, blank=True)
+    reapply_of = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="reapplications"
+    )
     description = models.TextField(
         max_length=1500, blank=True,
         help_text="Required free-text description written by the claimant (blank only on older claims).",
@@ -209,7 +230,25 @@ class ClaimApplication(models.Model):
 
     @property
     def is_open(self):
-        return self.status == self.Status.SUBMITTED
+        return self.status in self.ACTIVE_STATUSES
+
+    @property
+    def is_lost_report(self):
+        return self.finder_id is not None
+
+    @property
+    def finder_user(self):
+        """Who verifies the claimant: the FOUND post's author, or the LOST post's finder."""
+        return self.finder if self.finder_id else self.post.author
+
+    @property
+    def approval_rank(self):
+        """1 for the first approved claim on the post, 2 for the next, and so on."""
+        if self.status not in self.RANKED_STATUSES or not self.approved_at:
+            return None
+        return self.post.claims.filter(
+            status__in=self.RANKED_STATUSES, approved_at__lt=self.approved_at,
+        ).count() + 1
 
 
 class ClaimAnswer(models.Model):
@@ -281,13 +320,59 @@ class ChatMessage(models.Model):
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="messages")
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="sent_messages")
     text = models.CharField(max_length=2000)
+    client_id = models.CharField(max_length=64, blank=True, help_text="Browser-generated id so a resent message is saved once.")
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["sent_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "client_id"], condition=~models.Q(client_id=""),
+                name="unique_chat_message_client_id",
+            )
+        ]
 
     def __str__(self):
         return f"Message from {self.sender}"
+
+
+class ChatQuestion(models.Model):
+    """A question card the finder sends inside a chat; the claimant/owner answers it.
+    Answers are read and judged by a person, never checked automatically."""
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="questions")
+    order = models.PositiveSmallIntegerField()
+    template = models.ForeignKey(QuestionTemplate, on_delete=models.SET_NULL, null=True, blank=True)
+    text = models.CharField(max_length=240)
+    answer_type = models.CharField(max_length=8, choices=AnswerType.choices, default=AnswerType.TEXT)
+    choices = models.JSONField(default=list, blank=True)
+    asked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="asked_chat_questions")
+    asked_at = models.DateTimeField(auto_now_add=True)
+    answer_text = models.TextField(max_length=1200, blank=True)
+    answered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="answered_chat_questions"
+    )
+    answered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["order"]
+        constraints = [
+            models.UniqueConstraint(fields=["conversation", "order"], name="unique_chat_question_order"),
+        ]
+
+    @property
+    def is_answered(self):
+        return self.answered_at is not None
+
+
+class IdempotencyKey(models.Model):
+    """One-time form keys: a repeated submit with the same key is ignored."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
+    key = models.CharField(max_length=64)
+    path = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "key"], name="unique_user_idempotency_key")]
 
 
 class PostStatusEvent(models.Model):
@@ -310,6 +395,7 @@ class InAppNotification(models.Model):
     post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="notifications")
     claim = models.ForeignKey(ClaimApplication, on_delete=models.SET_NULL, null=True, blank=True)
     text = models.CharField(max_length=240)
+    is_priority = models.BooleanField(default=False, help_text="Shown as a red badge on Messages until read.")
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
 

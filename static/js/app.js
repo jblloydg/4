@@ -1,4 +1,25 @@
 document.addEventListener("DOMContentLoaded", function () {
+  // One-time key per form (duplicate-submit protection) and single-click submit buttons.
+  function oneTimeKey() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+  }
+  document.querySelectorAll("form").forEach(function (form) {
+    if ((form.getAttribute("method") || "").toLowerCase() !== "post") return;
+    var key = document.createElement("input");
+    key.type = "hidden";
+    key.name = "idempotency_key";
+    key.value = oneTimeKey();
+    form.appendChild(key);
+    form.addEventListener("submit", function () {
+      if (form.getAttribute("data-submitting") === "true") return;
+      form.setAttribute("data-submitting", "true");
+      window.setTimeout(function () {
+        form.querySelectorAll("button[type='submit'], button:not([type])").forEach(function (b) { b.disabled = true; });
+      }, 0);
+    });
+  });
+
   var modal = document.getElementById("login-modal");
   var nextField = document.getElementById("login-next");
   var firstInput = modal ? modal.querySelector("input[name='username']") : null;
@@ -164,6 +185,32 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("input[name='remove_photos']").forEach(function (box) { box.addEventListener("change", updatePhotoState); });
     updatePhotoState();
   }
+
+  // Search + max-count for the in-chat question picker.
+  document.querySelectorAll(".question-ask").forEach(function (box) {
+    var filter = box.querySelector(".question-filter");
+    var list = box.querySelector(".chat-question-list");
+    if (!list) return;
+    var max = parseInt(list.getAttribute("data-max") || "5", 10);
+    var items = Array.prototype.slice.call(list.querySelectorAll(".question-option"));
+    function sync() {
+      var checked = items.filter(function (o) { return o.querySelector("input").checked; }).length;
+      items.forEach(function (o) {
+        var input = o.querySelector("input");
+        o.classList.toggle("is-checked", input.checked);
+        input.disabled = !input.checked && checked >= max;
+      });
+    }
+    list.addEventListener("change", sync);
+    if (filter) {
+      filter.addEventListener("keydown", function (event) { if (event.key === "Enter") event.preventDefault(); });
+      filter.addEventListener("input", function () {
+        var term = filter.value.trim().toLowerCase();
+        items.forEach(function (o) { o.hidden = !!term && o.textContent.toLowerCase().indexOf(term) === -1; });
+      });
+    }
+    sync();
+  });
 
   var params = new URLSearchParams(window.location.search);
   if (params.get("resume") === "claim") {

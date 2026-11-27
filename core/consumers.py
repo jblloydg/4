@@ -50,12 +50,13 @@ class ConversationConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps({"type": "error", "message": "Invalid message."}))
             return
         message = str(payload.get("message", "")).strip()
+        client_id = str(payload.get("client_id", ""))[:64]
         if not message:
             return
         if len(message) > 2000:
             await self.send(text_data=json.dumps({"type": "error", "message": "Messages must be 2,000 characters or fewer."}))
             return
-        stored = await self._save_message(self.scope["user"].pk, message)
+        stored = await self._save_message(self.scope["user"].pk, message, client_id)
         if not stored:
             await self.send(text_data=json.dumps({"type": "error", "message": "This conversation is no longer open."}))
             return
@@ -68,6 +69,7 @@ class ConversationConsumer(AsyncWebsocketConsumer):
                 "sender_id": stored["sender_id"],
                 "text": stored["text"],
                 "sent_at": stored["sent_at"],
+                "client_id": stored["client_id"],
             },
         )
 
@@ -79,7 +81,12 @@ class ConversationConsumer(AsyncWebsocketConsumer):
             "sender_id": event["sender_id"],
             "text": event["text"],
             "sent_at": event["sent_at"],
+            "client_id": event.get("client_id", ""),
         }))
+
+    async def chat_event(self, event):
+        """Question-card and claim updates pushed by the server."""
+        await self.send(text_data=json.dumps({"type": "event", **event.get("payload", {})}))
 
     @database_sync_to_async
     def _can_view(self, user_id):
@@ -101,27 +108,37 @@ class ConversationConsumer(AsyncWebsocketConsumer):
         return not conversation.is_closed and not conversation.is_paused
 
     @database_sync_to_async
-    def _save_message(self, user_id, text):
+    def _save_message(self, user_id, text, client_id=""):
         conversation = Conversation.objects.select_related("post", "claim").filter(pk=self.conversation_id).first()
         if not self.scope["user"].is_active or not conversation or conversation.is_closed or conversation.is_paused:
             return None
         if user_id not in {conversation.initiator_id, conversation.recipient_id}:
             return None
-        message = ChatMessage.objects.create(
-            conversation=conversation,
-            sender_id=user_id,
-            text=text,
-        )
+        if client_id:
+            # A resend after a dropped connection carries the same id: save once.
+            message, created = ChatMessage.objects.get_or_create(
+                conversation=conversation, client_id=client_id,
+                defaults={"sender_id": user_id, "text": text},
+            )
+            if not created:
+                return self._serialize(message, user_id)
+        else:
+            message = ChatMessage.objects.create(conversation=conversation, sender_id=user_id, text=text)
         conversation.updated_at = timezone.now()
         conversation.save(update_fields=["updated_at"])
         if conversation.claim_id:
             ClaimApplication.objects.filter(pk=conversation.claim_id).update(last_activity_at=timezone.now())
+        return self._serialize(message, user_id)
+
+    @staticmethod
+    def _serialize(message, user_id):
         return {
             "id": message.pk,
             "sender": message.sender.get_full_name() or message.sender.username,
             "sender_id": user_id,
             "text": message.text,
             "sent_at": message.sent_at.isoformat(),
+            "client_id": message.client_id,
         }
 
 

@@ -29,6 +29,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "core.idempotency.IdempotencyMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 if not DEBUG:
