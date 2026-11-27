@@ -238,7 +238,7 @@ Use a normal window for one account and a private/incognito window for another.
 - **Backups are not encrypted** and contain private claim answers and chats. Keep the `backups` folder private.
 - **Student enrollment** is still not verified (format check only).
 - **Similarity search** for questions is planned for later (not included, by request).
-- **Figma:** new screens were added on a separate page, **"04 — New Features (Nov 2026)"**; the original pages were not changed.
+- **Figma:** the Starter plan allows only 3 pages, so the new screens are in a section named **"New Features (Nov 2026)"** below the existing screens on **"01 — Screens & Overview"** (N1 Create post, N2 Post detail, N3 Chat question cards, N4 Scan + offline queue, N5 Turn-in link staff/public + status request, N6 Question bank, plus local button/chip/header components). Existing frames were not changed.
 
 ---
 
