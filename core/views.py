@@ -14,19 +14,19 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from .forms import (
-    AdminReviewForm, CategoryForm, ClaimAnswerForm, CloseReasonForm, CommentForm,
+    AdminReviewForm, CategoryForm, ClaimAnswerForm, CloseReasonForm, CommentForm, QuestionTemplateForm,
     FindItLoginForm, ItemPostForm, ReportForm, SignupForm, StaffAccountForm,
     SystemSettingsForm,
 )
 from .models import (
     AbuseReport, Category, ClaimAnswer, ClaimApplication, Comment, Conversation,
-    InAppNotification, ItemPost, PostStatusEvent, Profile, StaffAuditLog,
+    InAppNotification, ItemPost, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
     SystemSettings, VerificationQuestion,
 )
 from .permissions import is_admin, is_staff_or_admin, role_of
 from .services import (
     archive_post, audit, close_claim, close_post, confirm_claimed,
-    create_claim_conversation, create_lost_post_conversation, notify_user, record_status,
+    apply_post_questions, create_claim_conversation, create_lost_post_conversation, notify_user, record_status,
     return_to_claimant, turn_over_to_guardhouse,
 )
 
@@ -152,7 +152,9 @@ def post_detail(request, post_id):
             status__in=[ClaimApplication.Status.SUBMITTED, ClaimApplication.Status.RETURNED],
         ).first()
         if post.can_accept_claims and request.user.pk != post.author_id and not user_claim:
-            claim_form = ClaimAnswerForm(questions=post.verification_questions.all())
+            saved = request.session.get("claim_form_data") or {}
+            data = saved.get("data") if saved.get("post") == str(post.pk) else None
+            claim_form = ClaimAnswerForm(data, questions=post.verification_questions.all())
 
     can_manage = request.user.is_authenticated and (
         request.user.pk == post.author_id or is_staff_or_admin(request.user)
@@ -202,6 +204,20 @@ def _human_check(request, refresh=False):
     return challenge
 
 
+def _question_options(form):
+    """Question bank rows for the picker, with selection state and category ids."""
+    raw = form["questions"].value() or []
+    selected = {str(v) for v in raw}
+    options = []
+    for template in form.fields["questions"].queryset:
+        options.append({
+            "template": template,
+            "selected": str(template.pk) in selected,
+            "category_ids": " ".join(str(c.pk) for c in template.categories.all()),
+        })
+    return options
+
+
 def _posting_rate_limited(user):
     since = timezone.now() - timedelta(hours=1)
     return ItemPost.objects.filter(author=user, created_at__gte=since).count() >= POSTS_PER_HOUR_LIMIT
@@ -221,9 +237,7 @@ def create_post(request):
                 post.author = request.user
                 post.save()
                 form.save_photos(post)
-                if post.post_type == ItemPost.Type.FOUND:
-                    for order, text in enumerate(form.question_texts(), start=1):
-                        VerificationQuestion.objects.create(post=post, order=order, text=text)
+                apply_post_questions(post, form.picked_questions())
                 PostStatusEvent.objects.create(
                     post=post,
                     previous_status="",
@@ -236,7 +250,9 @@ def create_post(request):
             return redirect("post-detail", post_id=post.pk)
         challenge = _human_check(request, refresh=True)
         form.human_check_answer = challenge["answer"]
-    return render(request, "core/post_form.html", {"form": form, "human_check_question": challenge["question"]})
+    return render(request, "core/post_form.html", {
+        "form": form, "human_check_question": challenge["question"], "question_options": _question_options(form),
+    })
 
 
 @login_required
@@ -246,32 +262,25 @@ def edit_post(request, post_id):
         return HttpResponseForbidden("Only the post author or an administrator may edit this post.")
     challenge = _human_check(request)
     form = ItemPostForm(request.POST or None, request.FILES or None, instance=post, human_check_answer=challenge["answer"])
+    if post.claims.exists():
+        form.fields["post_type"].disabled = True
+        form.fields["questions"].disabled = True
+        form.fields["questions"].help_text = "Locked after a claim is submitted so earlier answers stay attached to their questions."
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
             updated = form.save()
             form.save_photos(updated)
-        if not post.claims.exists():
-            if updated.post_type == ItemPost.Type.FOUND:
-                updated.verification_questions.all().delete()
-                for order, text in enumerate(form.question_texts(), start=1):
-                    VerificationQuestion.objects.create(post=updated, order=order, text=text)
-            else:
-                updated.verification_questions.all().delete()
+            if not post.claims.exists():
+                apply_post_questions(updated, form.picked_questions())
         messages.success(request, "Your post was updated.")
         return redirect("post-detail", post_id=post.pk)
-    existing_questions = list(post.verification_questions.order_by("order"))
-    if post.claims.exists():
-        form.fields["post_type"].disabled = True
-    for index, question in enumerate(existing_questions, start=1):
-        form.fields[f"question_{index}"].initial = question.text
-        if post.claims.exists():
-            form.fields[f"question_{index}"].disabled = True
-            form.fields[f"question_{index}"].help_text = "Locked after a claim is submitted so earlier answers stay attached to their questions."
     if request.method == "POST" and not form.is_valid():
         challenge = _human_check(request, refresh=True)
         form.human_check_answer = challenge["answer"]
     return render(request, "core/post_form.html", {
         "form": form, "editing": True, "post": post, "human_check_question": challenge["question"],
+        "question_options": _question_options(form), "questions_locked": post.claims.exists(),
+        "locked_questions": post.verification_questions.all(),
     })
 
 
@@ -293,16 +302,20 @@ def submit_claim(request, post_id):
         return redirect("my-claims")
 
     questions = list(post.verification_questions.order_by("order"))
-    if len(questions) != 5:
-        messages.error(request, "This post is missing its five private verification questions. Please contact staff.")
+    if len(questions) < 3:
+        messages.error(request, "This post is missing its private ownership questions. Please contact staff.")
         return redirect("post-detail", post_id=post.pk)
     form = ClaimAnswerForm(request.POST, questions=questions)
     if not form.is_valid():
-        messages.error(request, "Please answer all five private questions.")
+        request.session["claim_form_data"] = {"post": str(post.pk), "data": request.POST.dict()}
+        messages.error(request, "Please answer every question and write a short description (at least 10 characters).")
         return redirect(f"{reverse('post-detail', args=[post.pk])}?resume=claim#claim-form")
+    request.session.pop("claim_form_data", None)
 
     with transaction.atomic():
-        claim = ClaimApplication.objects.create(post=post, claimant=request.user)
+        claim = ClaimApplication.objects.create(
+            post=post, claimant=request.user, description=form.cleaned_data["description"].strip(),
+        )
         for question in questions:
             ClaimAnswer.objects.create(
                 claim=claim,
@@ -694,3 +707,28 @@ def admin_category_edit(request, category_id):
         messages.success(request, "Category saved.")
         return redirect("admin-categories")
     return render(request, "core/admin_category_edit.html", {"form": form, "category": category})
+
+
+@login_required
+def admin_questions(request):
+    if not is_admin(request.user):
+        return HttpResponseForbidden("Administrator access is required.")
+    q = request.GET.get("q", "").strip()
+    templates = QuestionTemplate.objects.prefetch_related("categories").annotate(use_count=Count("post_questions"))
+    if q:
+        templates = templates.filter(text__icontains=q)
+    return render(request, "core/admin_questions.html", {"templates": templates, "q": q})
+
+
+@login_required
+def admin_question_edit(request, template_id=None):
+    if not is_admin(request.user):
+        return HttpResponseForbidden("Administrator access is required.")
+    template = get_object_or_404(QuestionTemplate, pk=template_id) if template_id else None
+    form = QuestionTemplateForm(request.POST or None, instance=template)
+    if request.method == "POST" and form.is_valid():
+        saved = form.save()
+        audit(request.user, "updated_question" if template else "created_question", saved, saved.text[:200])
+        messages.success(request, "Question saved. Posts that already use it keep their original wording.")
+        return redirect("admin-questions")
+    return render(request, "core/admin_question_edit.html", {"form": form, "template": template})

@@ -127,10 +127,48 @@ class PostPhoto(models.Model):
         return f"Photo {self.order} for {self.post}"
 
 
+class AnswerType(models.TextChoices):
+    CHOICE = "CHOICE", "Choose from a list"
+    TEXT = "TEXT", "Free text"
+
+
+class QuestionTemplate(models.Model):
+    """A preset ownership question in the admin-managed question bank.
+
+    Finders pick from these instead of typing questions. A question is either
+    general (offered for every category) or tied to specific categories.
+    Default questions fill a post up to the minimum of three.
+    """
+    text = models.CharField(max_length=240)
+    answer_type = models.CharField(max_length=8, choices=AnswerType.choices, default=AnswerType.TEXT)
+    choices = models.JSONField(default=list, blank=True, help_text="Answer options for list questions.")
+    categories = models.ManyToManyField(Category, blank=True, related_name="question_templates")
+    is_general = models.BooleanField(default=True, help_text="Offer this question for every category.")
+    is_default = models.BooleanField(default=False, help_text="Used automatically when a finder picks fewer than three.")
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveSmallIntegerField(default=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "text"]
+
+    def __str__(self):
+        return self.text
+
+
 class VerificationQuestion(models.Model):
+    """The questions attached to one found post. Text, type and choices are
+    copied from the question bank so later bank edits never change what an
+    earlier claimant answered."""
     post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="verification_questions")
     order = models.PositiveSmallIntegerField()
     text = models.CharField(max_length=240)
+    template = models.ForeignKey(
+        QuestionTemplate, on_delete=models.SET_NULL, null=True, blank=True, related_name="post_questions"
+    )
+    answer_type = models.CharField(max_length=8, choices=AnswerType.choices, default=AnswerType.TEXT)
+    choices = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ["order"]
@@ -153,6 +191,10 @@ class ClaimApplication(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="claims")
     claimant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="claims")
+    description = models.TextField(
+        max_length=1500, blank=True,
+        help_text="Required free-text description written by the claimant (blank only on older claims).",
+    )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.SUBMITTED)
     submitted_at = models.DateTimeField(auto_now_add=True)
     last_activity_at = models.DateTimeField(default=timezone.now)

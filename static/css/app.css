@@ -393,3 +393,24 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal) !important
 .human-check[hidden] { display: none; }
 .checkbox-label { display: flex !important; align-items: center; gap: 8px; grid-template-columns: none; }
 .checkbox-label input { width: auto; }
+
+/* ---- Ownership question picker ---- */
+.question-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.question-search { flex: 1; padding: 6px 12px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.question-list { display: grid; gap: 6px; max-height: 360px; overflow-y: auto; padding: 4px 2px; }
+.question-option { display: flex !important; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: white; font-weight: 400 !important; cursor: pointer; }
+.question-option:hover { border-color: #b9dcd7; }
+.question-option input { width: auto !important; margin-top: 4px; }
+.question-option strong { display: block; color: var(--navy); font-size: .86rem; }
+.question-option small { display: block; margin-top: 2px; font-size: .72rem; }
+.question-option.is-suggested { border-color: #bfe0db; background: #f6fbfa; }
+.question-option.is-checked { border-color: var(--teal); background: var(--teal-pale); }
+.question-option[hidden] { display: none !important; }
+.locked-questions { margin: 0; padding-left: 20px; color: var(--ink); font-size: .86rem; }
+.claimant-description { border-color: #bfe0db; background: #f6fbfa; }
+.category-checks { display: grid; gap: 6px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.category-checks legend { padding: 0 6px; color: var(--navy); font-size: .82rem; font-weight: 700; }
+.category-checks ul, .category-checks div { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 10px; }
+.category-checks label { display: flex; gap: 6px; align-items: center; font-weight: 400; font-size: .82rem; }
+.category-checks input { width: auto; }
+.question-bank-panel { padding: 8px 22px; }

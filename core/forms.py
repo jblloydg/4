@@ -8,13 +8,17 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-from .models import AbuseReport, Category, ItemPost, PostPhoto, Profile, SystemSettings
+from .models import (
+    AbuseReport, AnswerType, Category, ItemPost, PostPhoto, Profile, QuestionTemplate, SystemSettings,
+)
 from .validators import validate_photo
 
 User = get_user_model()
 STUDENT_ID_PATTERN = re.compile(r"^\d{4}-\d{4}$")
 MAX_POST_PHOTOS = 20
 HUMAN_CHECK_PHOTO_THRESHOLD = 10
+MIN_POST_QUESTIONS = 3
+MAX_POST_QUESTIONS = 5
 
 
 class FindItLoginForm(AuthenticationForm):
@@ -144,11 +148,16 @@ class ItemPostForm(forms.ModelForm):
         required=False, max_length=8, label="Quick check",
         widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "off"}),
     )
-    question_1 = forms.CharField(max_length=240, required=False, label="Private question 1")
-    question_2 = forms.CharField(max_length=240, required=False, label="Private question 2")
-    question_3 = forms.CharField(max_length=240, required=False, label="Private question 3")
-    question_4 = forms.CharField(max_length=240, required=False, label="Private question 4")
-    question_5 = forms.CharField(max_length=240, required=False, label="Private question 5")
+    questions = forms.ModelMultipleChoiceField(
+        queryset=QuestionTemplate.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label="Ownership questions",
+        help_text=(
+            f"Pick up to {MAX_POST_QUESTIONS}. If you pick fewer than {MIN_POST_QUESTIONS}, "
+            "default questions are added for you."
+        ),
+    )
 
     class Meta:
         model = ItemPost
@@ -173,6 +182,11 @@ class ItemPostForm(forms.ModelForm):
         self.fields["category"].empty_label = "Choose a category"
         if self.instance.pk:
             self.fields["remove_photos"].queryset = self.instance.photos.all()
+        self.fields["questions"].queryset = QuestionTemplate.objects.filter(is_active=True).prefetch_related("categories")
+        if self.instance.pk:
+            self.fields["questions"].initial = [
+                q.template_id for q in self.instance.verification_questions.all() if q.template_id
+            ]
 
     def existing_photo_count(self):
         return self.instance.photos.count() if self.instance.pk else 0
@@ -193,16 +207,13 @@ class ItemPostForm(forms.ModelForm):
                     "human_check",
                     f"Uploading more than {HUMAN_CHECK_PHOTO_THRESHOLD} photos needs the quick check. Enter the answer shown.",
                 )
-        if cleaned.get("post_type") == ItemPost.Type.FOUND:
-            questions = [cleaned.get(f"question_{n}", "").strip() for n in range(1, 6)]
-            if any(not question for question in questions):
-                raise ValidationError("A found-item post needs exactly five private verification questions.")
-            if len({q.casefold() for q in questions}) != 5:
-                raise ValidationError("Use five different private questions.")
+        picked = cleaned.get("questions") or []
+        if len(picked) > MAX_POST_QUESTIONS:
+            self.add_error("questions", f"Pick at most {MAX_POST_QUESTIONS} questions.")
         return cleaned
 
-    def question_texts(self):
-        return [self.cleaned_data[f"question_{n}"].strip() for n in range(1, 6)]
+    def picked_questions(self):
+        return list(self.cleaned_data.get("questions") or [])
 
     def save_photos(self, post):
         """Apply photo removals and additions after the post itself is saved."""
@@ -222,14 +233,97 @@ class CommentForm(forms.Form):
 
 
 class ClaimAnswerForm(forms.Form):
+    """Private claim: one answer per post question plus a required description."""
+
     def __init__(self, *args, questions=None, **kwargs):
         super().__init__(*args, **kwargs)
         for question in questions or []:
-            self.fields[f"answer_{question.pk}"] = forms.CharField(
-                label=question.text,
-                max_length=1200,
-                widget=forms.Textarea(attrs={"rows": 3, "placeholder": "Your private answer"}),
-            )
+            name = f"answer_{question.pk}"
+            if question.answer_type == AnswerType.CHOICE and question.choices:
+                self.fields[name] = forms.ChoiceField(
+                    label=question.text,
+                    choices=[("", "Choose an answer")] + [(c, c) for c in question.choices],
+                )
+            else:
+                self.fields[name] = forms.CharField(
+                    label=question.text,
+                    max_length=1200,
+                    widget=forms.Textarea(attrs={"rows": 2, "placeholder": "Your private answer"}),
+                )
+        self.fields["description"] = forms.CharField(
+            label="Describe the item in your own words",
+            max_length=1500,
+            min_length=10,
+            help_text="Required. Mention details only the owner would know. Only the finder and staff can read this.",
+            widget=forms.Textarea(attrs={"rows": 4, "placeholder": "For example: what it looks like, what was inside, how you lost it"}),
+        )
+
+    def answer_fields(self):
+        return [field for field in self if field.name.startswith("answer_")]
+
+
+class QuestionTemplateForm(forms.ModelForm):
+    choices_text = forms.CharField(
+        required=False,
+        label="Answer options (one per line)",
+        widget=forms.Textarea(attrs={"rows": 6}),
+        help_text="Only for 'Choose from a list'. Add at least two options; consider including “Not sure”.",
+    )
+
+    class Meta:
+        model = QuestionTemplate
+        fields = ["text", "answer_type", "categories", "is_general", "is_default", "is_active", "sort_order"]
+        widgets = {
+            "text": forms.TextInput(),
+            "categories": forms.CheckboxSelectMultiple,
+        }
+        labels = {
+            "text": "Question",
+            "is_general": "General (offer for every category)",
+            "is_default": "Default (auto-added when a finder picks fewer than three)",
+            "is_active": "Active",
+            "sort_order": "Display order (lower shows first)",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["categories"].queryset = Category.objects.all()
+        self.fields["categories"].required = False
+        if self.instance.pk and self.instance.choices:
+            self.fields["choices_text"].initial = "\n".join(self.instance.choices)
+
+    def clean(self):
+        cleaned = super().clean()
+        options = []
+        for line in (cleaned.get("choices_text") or "").splitlines():
+            line = line.strip()
+            if line and line.casefold() not in {o.casefold() for o in options}:
+                options.append(line[:120])
+        if cleaned.get("answer_type") == AnswerType.CHOICE:
+            if len(options) < 2:
+                self.add_error("choices_text", "A list question needs at least two answer options.")
+        else:
+            options = []
+        cleaned["choices"] = options
+        if not cleaned.get("is_general") and not cleaned.get("categories"):
+            self.add_error("categories", "Choose at least one category, or mark the question as general.")
+        if cleaned.get("is_default") and not cleaned.get("is_general"):
+            self.add_error("is_default", "Default questions must be general so they fit every category.")
+        will_be_default = bool(cleaned.get("is_default")) and bool(cleaned.get("is_active"))
+        if not will_be_default:
+            others = QuestionTemplate.objects.filter(is_default=True, is_active=True)
+            if self.instance.pk:
+                others = others.exclude(pk=self.instance.pk)
+            if others.count() < MIN_POST_QUESTIONS:
+                self.add_error(
+                    "is_default",
+                    f"Keep at least {MIN_POST_QUESTIONS} active default questions so every post has enough questions.",
+                )
+        return cleaned
+
+    def save(self, commit=True):
+        self.instance.choices = self.cleaned_data.get("choices", [])
+        return super().save(commit=commit)
 
 
 class ReportForm(forms.ModelForm):

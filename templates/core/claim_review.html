@@ -7,6 +7,7 @@
     <span class="eyebrow">Private ownership verification</span><h1>{{ claim.post.display_title }}</h1>
     <p class="muted">Only the finder and authorized staff can view this form. Do not share answers with other claimants.</p>
     <div class="claim-review-meta"><strong>Applicant</strong><span>{{ claim.claimant.first_name|default:claim.claimant.username }}</span><strong>Submitted</strong><span>{{ claim.submitted_at|date:"M j, Y · g:i a" }}</span><strong>Status</strong><span>{{ claim.get_status_display }}</span></div>
+    {% if claim.description %}<article class="answer-card claimant-description"><span>Claimant's description</span><p>{{ claim.description|linebreaksbr }}</p></article>{% endif %}
     <div class="answer-list">
       {% for answer in answers %}<article class="answer-card"><span>Question {{ answer.question.order }}</span><h3>{{ answer.question.text }}</h3><p>{{ answer.answer_text|linebreaksbr }}</p></article>{% empty %}<p class="muted">This application has no saved answers.</p>{% endfor %}
     </div>

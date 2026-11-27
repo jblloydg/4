@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from .models import (
     AbuseReport, ClaimApplication, Conversation, InAppNotification, ItemPost,
-    PostStatusEvent, Profile, StaffAuditLog, SystemSettings, VerificationQuestion,
+    PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog, SystemSettings, VerificationQuestion,
 )
 from .permissions import is_staff_or_admin
 
@@ -43,6 +43,49 @@ def record_status(post, new_status, actor=None, note="", related_claim=None):
         note=note[:240],
         related_claim=related_claim,
     )
+
+
+MIN_POST_QUESTIONS = 3
+MAX_POST_QUESTIONS = 5
+
+
+def resolve_post_questions(picked):
+    """Return 3-5 question templates: the finder's picks (max 5) topped up with
+    active default questions until there are at least three."""
+    chosen = list(picked)[:MAX_POST_QUESTIONS]
+    if len(chosen) < MIN_POST_QUESTIONS:
+        chosen_ids = {q.pk for q in chosen}
+        defaults = QuestionTemplate.objects.filter(is_default=True, is_active=True).exclude(pk__in=chosen_ids)
+        for template in defaults:
+            if len(chosen) >= MIN_POST_QUESTIONS:
+                break
+            chosen.append(template)
+    if len(chosen) < MIN_POST_QUESTIONS:
+        fallback = QuestionTemplate.objects.filter(is_active=True, is_general=True).exclude(pk__in={q.pk for q in chosen})
+        for template in fallback:
+            if len(chosen) >= MIN_POST_QUESTIONS:
+                break
+            chosen.append(template)
+    return chosen
+
+
+def apply_post_questions(post, picked):
+    """Replace a found post's questions with snapshots of the chosen templates.
+    Callers must not do this once a claim exists."""
+    post.verification_questions.all().delete()
+    if post.post_type != ItemPost.Type.FOUND:
+        return []
+    created = []
+    for order, template in enumerate(resolve_post_questions(picked), start=1):
+        created.append(VerificationQuestion.objects.create(
+            post=post,
+            order=order,
+            text=template.text,
+            template=template,
+            answer_type=template.answer_type,
+            choices=list(template.choices or []),
+        ))
+    return created
 
 
 def notify_user(user, post, text, claim=None):

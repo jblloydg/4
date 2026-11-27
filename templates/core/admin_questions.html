@@ -1,0 +1,30 @@
+{% extends "core/base.html" %}
+{% block title %}Question bank · Find-IT{% endblock %}
+{% block content %}
+<section class="page-wrap">
+  <a class="back-link" href="{% url 'staff-dashboard' %}">← Staff workspace</a>
+  <div class="page-heading compact-heading">
+    <div><span class="eyebrow">Administrator only</span><h1>Ownership question bank</h1>
+      <p class="muted">Finders pick from these questions. Posts keep a copy of each question, so editing here never changes what earlier claimants answered. Turn questions off instead of deleting them.</p></div>
+    <a class="button button-primary" href="{% url 'admin-question-new' %}">＋ New question</a>
+  </div>
+  <form class="search-panel" method="get"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" name="q" value="{{ q }}" placeholder="Search questions" aria-label="Search questions"></label><button class="button button-outline" type="submit">Search</button></form>
+  <section class="panel question-bank-panel">
+    {% for t in templates %}
+    <article class="staff-row">
+      <div>
+        <div class="card-meta">
+          <span class="subtle-chip">{{ t.get_answer_type_display }}</span>
+          {% if t.is_default %}<span class="type-pill type-found">Default</span>{% endif %}
+          {% if t.is_general %}<span class="status-dot">General</span>{% else %}<span class="status-dot">{% for c in t.categories.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+          {% if not t.is_active %}<span class="status-pill status-closed">Off</span>{% endif %}
+        </div>
+        <h3>{{ t.text }}</h3>
+        <small>{% if t.choices %}{{ t.choices|length }} options · {% endif %}Used on {{ t.use_count }} post{{ t.use_count|pluralize }}</small>
+      </div>
+      <a class="button button-soft button-small" href="{% url 'admin-question-edit' t.pk %}">Edit</a>
+    </article>
+    {% empty %}<p class="muted">No questions match.</p>{% endfor %}
+  </section>
+</section>
+{% endblock %}

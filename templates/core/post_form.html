@@ -33,8 +33,29 @@
     <label>{{ form.description.label }}{{ form.description }}<small class="form-help">Avoid exact serial numbers, hidden markings, or personal details.</small></label>{% if form.description.errors %}<div class="field-error">{{ form.description.errors }}</div>{% endif %}
     <label>Approximate date{{ form.approximate_date }}</label>{% if form.approximate_date.errors %}<div class="field-error">{{ form.approximate_date.errors }}</div>{% endif %}
     <div id="verification-questions" class="question-editor">
-      <div><span class="eyebrow">Private ownership check</span><h2>Write five questions</h2><p class="muted">These questions are hidden from the public. Avoid clues already visible in the post or photo.</p></div>
-      {% for field in form %}{% if "question_" in field.name %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endif %}{% endfor %}
+      <div><span class="eyebrow">Private ownership check · found items</span><h2>Pick ownership questions</h2>
+        <p class="muted">Claimants answer these privately. Pick up to 5. If you pick fewer than 3 (or none), default questions are added automatically. Claimants also write their own description.</p></div>
+      {% if questions_locked %}
+        <div class="form-callout"><strong>Questions are locked</strong><span>{{ form.questions.help_text }}</span></div>
+        <ol class="locked-questions">{% for q in locked_questions %}<li>{{ q.text }}</li>{% endfor %}</ol>
+      {% else %}
+        <div class="question-toolbar">
+          <label class="search-field question-search"><span aria-hidden="true">⌕</span><input type="search" id="question-search" placeholder="Search questions" aria-label="Search questions"></label>
+          <span class="subtle-chip" id="question-picked" aria-live="polite">0 of 5 picked</span>
+        </div>
+        <p class="fine-print" id="question-suggest-note" hidden>Questions for the chosen category are shown first.</p>
+        <div class="question-list" id="question-list">
+          {% for option in question_options %}
+          <label class="question-option" data-categories="{{ option.category_ids }}" data-general="{{ option.template.is_general|yesno:'1,0' }}" data-default="{{ option.template.is_default|yesno:'1,0' }}">
+            <input type="checkbox" name="questions" value="{{ option.template.pk }}"{% if option.selected %} checked{% endif %}>
+            <span><strong>{{ option.template.text }}</strong>
+              <small>{{ option.template.get_answer_type_display }}{% if option.template.is_default %} · Default{% endif %}{% if not option.template.is_general %} · {% for c in option.template.categories.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</small></span>
+          </label>
+          {% endfor %}
+          <p class="muted question-empty" id="question-empty" hidden>No questions match that search.</p>
+        </div>
+        {% if form.questions.errors %}<div class="field-error">{{ form.questions.errors }}</div>{% endif %}
+      {% endif %}
     </div>
     <div class="form-callout"><strong>Meet-up reminder</strong><span>Arrange any hand-off only within school premises.</span></div>
     <div class="form-actions"><a class="button button-outline" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">Cancel</a><button class="button button-primary" type="submit">{% if editing %}Save changes{% else %}Publish post{% endif %}</button></div>

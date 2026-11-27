@@ -31,7 +31,8 @@
         <div><span class="eyebrow">Private ownership check</span><h2>Claim this item</h2><p class="muted">Your answers are visible to the finder and authorized staff, not to other claimants.</p></div>
         <form method="post" action="{% url 'submit-claim' post.pk %}" class="stack-form">
           {% csrf_token %}
-          {% for field in claim_form %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endfor %}
+          {% for field in claim_form.answer_fields %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endfor %}
+          <label>{{ claim_form.description.label }} <span class="required-mark">required</span>{{ claim_form.description }}<small class="form-help">{{ claim_form.description.help_text }}</small></label>{% if claim_form.description.errors %}<div class="field-error">{{ claim_form.description.errors }}</div>{% endif %}
           <div class="form-callout"><strong>Plan a safe hand-off</strong><span>Meet only within school premises. Find-IT does not deliver items.</span></div>
           <button class="button button-primary" type="submit">Submit private claim</button>
         </form>

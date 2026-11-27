@@ -70,18 +70,75 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   var typeSelect = document.querySelector("[data-post-type]");
+  var categorySelect = document.querySelector("[data-category]");
   var questionBlock = document.getElementById("verification-questions");
+  var questionList = document.getElementById("question-list");
+  var questionSearch = document.getElementById("question-search");
+  var pickedLabel = document.getElementById("question-picked");
+  var suggestNote = document.getElementById("question-suggest-note");
+  var MAX_QUESTIONS = 5;
+
   function updateQuestions() {
     if (!typeSelect || !questionBlock) return;
-    var isFound = typeSelect.value === "FOUND";
-    questionBlock.hidden = !isFound;
-    questionBlock.querySelectorAll("input,textarea").forEach(function (input) {
-      input.required = isFound;
+    questionBlock.hidden = typeSelect.value !== "FOUND";
+  }
+  function questionOptions() {
+    return questionList ? Array.prototype.slice.call(questionList.querySelectorAll(".question-option")) : [];
+  }
+  function updatePicked() {
+    var options = questionOptions();
+    var checked = options.filter(function (o) { return o.querySelector("input").checked; });
+    options.forEach(function (o) {
+      var box = o.querySelector("input");
+      o.classList.toggle("is-checked", box.checked);
+      box.disabled = !box.checked && checked.length >= MAX_QUESTIONS;
     });
+    if (pickedLabel) {
+      var n = checked.length;
+      pickedLabel.textContent = n + " of " + MAX_QUESTIONS + " picked" + (n < 3 ? " · " + (3 - n) + " default" + (3 - n === 1 ? "" : "s") + " will be added" : "");
+    }
+  }
+  function sortByCategory() {
+    if (!questionList) return;
+    var categoryId = categorySelect ? categorySelect.value : "";
+    var options = questionOptions();
+    var anySuggested = false;
+    options.forEach(function (o) {
+      var ids = (o.getAttribute("data-categories") || "").split(" ");
+      var suggested = !!categoryId && ids.indexOf(categoryId) !== -1;
+      o.classList.toggle("is-suggested", suggested);
+      if (suggested) anySuggested = true;
+    });
+    options.sort(function (a, b) {
+      var rank = function (o) { return o.classList.contains("is-suggested") ? 0 : (o.getAttribute("data-general") === "1" ? 1 : 2); };
+      return rank(a) - rank(b);
+    }).forEach(function (o) { questionList.insertBefore(o, document.getElementById("question-empty")); });
+    if (suggestNote) suggestNote.hidden = !anySuggested;
+  }
+  function filterQuestions() {
+    var term = questionSearch ? questionSearch.value.trim().toLowerCase() : "";
+    var shown = 0;
+    questionOptions().forEach(function (o) {
+      var match = !term || o.textContent.toLowerCase().indexOf(term) !== -1;
+      o.hidden = !match;
+      if (match) shown += 1;
+    });
+    var empty = document.getElementById("question-empty");
+    if (empty) empty.hidden = shown !== 0;
   }
   if (typeSelect) {
     typeSelect.addEventListener("change", updateQuestions);
     updateQuestions();
+  }
+  if (questionList) {
+    questionList.addEventListener("change", updatePicked);
+    if (questionSearch) {
+      questionSearch.addEventListener("input", filterQuestions);
+      questionSearch.addEventListener("keydown", function (event) { if (event.key === "Enter") event.preventDefault(); });
+    }
+    if (categorySelect) categorySelect.addEventListener("change", sortByCategory);
+    sortByCategory();
+    updatePicked();
   }
 
   var photoInput = document.querySelector("input[type='file'][name='photos']");
@@ -113,7 +170,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var claim = document.getElementById("claim-form");
     if (claim) {
       claim.scrollIntoView({ behavior: "smooth", block: "center" });
-      var firstAnswer = claim.querySelector("textarea");
+      var firstAnswer = claim.querySelector("select, textarea");
       if (firstAnswer) firstAnswer.focus({ preventScroll: true });
     }
   }
