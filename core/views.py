@@ -864,7 +864,12 @@ def admin_reports(request):
     if not is_admin(request.user):
         return HttpResponseForbidden("Administrator access is required.")
     reports = AbuseReport.objects.select_related("reporter", "target_user", "conversation", "conversation__post", "reviewed_by")
-    return render(request, "core/admin_reports.html", {"reports": reports[:200]})
+    from .backups import last_status, list_backups
+    backups = list_backups()
+    return render(request, "core/admin_reports.html", {
+        "backup_status": last_status(),
+        "backups": backups[:5],
+        "backup_count": len(backups),"reports": reports[:200]})
 
 
 @login_required

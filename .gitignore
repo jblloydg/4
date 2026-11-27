@@ -12,3 +12,6 @@ staticfiles/
 *.log
 Thumbs.db
 Desktop.ini
+
+# Local backups (contain private data)
+backups/

@@ -498,3 +498,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal) !important
 .not-found h1 { color: #8a2f2f; }
 .gh-actions { margin-top: 12px; }
 .sub-heading { margin: 18px 0 4px; font-size: .95rem; }
+
+/* ---- Backups ---- */
+.backup-panel { display: grid; gap: 6px; margin-top: 18px; }
+.backup-ok { margin: 0; color: #1f7a54; }
+.backup-failed { margin: 0; color: #8a2f2f; }
+.backup-list { margin: 4px 0 0; padding-left: 18px; font-size: .82rem; }

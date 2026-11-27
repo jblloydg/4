@@ -20,5 +20,14 @@
     </article>
     {% empty %}<div class="empty-state"><div class="empty-icon">✓</div><h3>No reports</h3><p>Staff-submitted safety reports will appear here.</p></div>{% endfor %}
   </div>
+  <section class="panel backup-panel">
+    <span class="eyebrow">Backups</span><h2>Daily backups</h2>
+    {% if backup_status %}
+      <p class="{% if backup_status.ok %}backup-ok{% else %}backup-failed{% endif %}"><strong>{% if backup_status.ok %}✓ Last backup succeeded{% else %}✗ Last backup failed{% endif %}</strong> · {{ backup_status.at|slice:":16"|cut:"T"|default:"" }} UTC</p>
+      <p class="muted">{{ backup_status.message }}</p>
+    {% else %}<p class="backup-failed"><strong>No backup has run yet.</strong></p>{% endif %}
+    <p class="fine-print">{{ backup_count }} backup{{ backup_count|pluralize }} kept (older than 14 days are removed). One is made each day while the timer runner (<code>process_due --loop</code>) is running. Make one now with <code>python manage.py backup_now</code>; restore with <code>python manage.py restore_backup NAME</code> (command line only, server stopped).</p>
+    {% if backups %}<ul class="backup-list">{% for b in backups %}<li><code>{{ b.name }}</code> · {{ b.reason }} · {{ b.row_count }} rows · {{ b.media_files }} photos</li>{% endfor %}</ul>{% endif %}
+  </section>
 </section>
 {% endblock %}

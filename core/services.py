@@ -414,7 +414,13 @@ def archive_post(post, actor):
     return post
 
 
+def prune_idempotency_keys():
+    from .models import IdempotencyKey
+    IdempotencyKey.objects.filter(created_at__lt=timezone.now() - timedelta(days=2)).delete()
+
+
 def process_due_actions():
+    prune_idempotency_keys()
     now = timezone.now()
     settings_row = SystemSettings.current()
     expired_before = now - timedelta(days=7)
