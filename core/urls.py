@@ -32,6 +32,8 @@ urlpatterns = [
     path("staff/accounts/", views.staff_accounts, name="staff-accounts"),
     path("staff/settings/", views.admin_settings, name="admin-settings"),
     path("staff/reports/", views.admin_reports, name="admin-reports"),
+    path("staff/categories/", views.admin_categories, name="admin-categories"),
+    path("staff/categories/<int:category_id>/", views.admin_category_edit, name="admin-category-edit"),
     path("staff/reports/<uuid:report_id>/review/", views.review_report, name="review-report"),
     path("staff/comments/<int:comment_id>/moderate/", views.staff_moderate_comment, name="moderate-comment"),
 ]

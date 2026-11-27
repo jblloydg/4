@@ -1,9 +1,11 @@
+from datetime import timedelta
+
 from django.contrib import messages
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import Http404, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -12,12 +14,12 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from .forms import (
-    AdminReviewForm, ClaimAnswerForm, CloseReasonForm, CommentForm,
+    AdminReviewForm, CategoryForm, ClaimAnswerForm, CloseReasonForm, CommentForm,
     FindItLoginForm, ItemPostForm, ReportForm, SignupForm, StaffAccountForm,
     SystemSettingsForm,
 )
 from .models import (
-    AbuseReport, ClaimAnswer, ClaimApplication, Comment, Conversation,
+    AbuseReport, Category, ClaimAnswer, ClaimApplication, Comment, Conversation,
     InAppNotification, ItemPost, PostStatusEvent, Profile, StaffAuditLog,
     SystemSettings, VerificationQuestion,
 )
@@ -74,22 +76,33 @@ def logout_view(request):
 
 @login_required
 def home(request):
-    posts = ItemPost.objects.filter(is_archived=False).select_related("author", "author__profile")
+    posts = (
+        ItemPost.objects.filter(is_archived=False)
+        .select_related("author", "author__profile", "category")
+        .prefetch_related("photos")
+    )
     q = request.GET.get("q", "").strip()
     post_type = request.GET.get("type", "").strip()
     status = request.GET.get("status", "").strip()
+    category = request.GET.get("category", "").strip()
     if q:
-        posts = posts.filter(Q(title__icontains=q) | Q(description__icontains=q))
+        posts = posts.filter(
+            Q(title__icontains=q) | Q(description__icontains=q) | Q(category__name__icontains=q)
+        )
     if post_type in {ItemPost.Type.LOST, ItemPost.Type.FOUND}:
         posts = posts.filter(post_type=post_type)
     if status in dict(ItemPost.Status.choices):
         posts = posts.filter(status=status)
+    if category.isdigit():
+        posts = posts.filter(category_id=int(category))
     return render(request, "core/home.html", {
         "posts": posts[:100],
         "q": q,
         "selected_type": post_type,
         "selected_status": status,
+        "selected_category": category,
         "status_choices": ItemPost.Status.choices,
+        "categories": Category.objects.filter(is_active=True),
     })
 
 
@@ -117,7 +130,9 @@ def _conversation_for_post(post, user):
 
 
 def post_detail(request, post_id):
-    post = get_object_or_404(ItemPost.objects.select_related("author"), pk=post_id)
+    post = get_object_or_404(
+        ItemPost.objects.select_related("author", "category").prefetch_related("photos"), pk=post_id
+    )
     if not _can_view_archived(post, request.user):
         raise Http404
 
@@ -172,26 +187,56 @@ def post_detail(request, post_id):
     return render(request, "core/post_detail.html", context)
 
 
+POSTS_PER_HOUR_LIMIT = 10
+
+
+def _human_check(request, refresh=False):
+    """A simple offline 'are you human' question used for uploads above 10 photos.
+    The expected answer is kept in the session, never in the page."""
+    import secrets
+    challenge = request.session.get("post_human_check")
+    if refresh or not challenge:
+        a, b = secrets.randbelow(8) + 2, secrets.randbelow(8) + 2
+        challenge = {"question": f"What is {a} + {b}?", "answer": a + b}
+        request.session["post_human_check"] = challenge
+    return challenge
+
+
+def _posting_rate_limited(user):
+    since = timezone.now() - timedelta(hours=1)
+    return ItemPost.objects.filter(author=user, created_at__gte=since).count() >= POSTS_PER_HOUR_LIMIT
+
+
 @login_required
 def create_post(request):
-    form = ItemPostForm(request.POST or None, request.FILES or None)
-    if request.method == "POST" and form.is_valid():
-        post = form.save(commit=False)
-        post.author = request.user
-        post.save()
-        if post.post_type == ItemPost.Type.FOUND:
-            for order, text in enumerate(form.question_texts(), start=1):
-                VerificationQuestion.objects.create(post=post, order=order, text=text)
-        PostStatusEvent.objects.create(
-            post=post,
-            previous_status="",
-            new_status=post.status,
-            actor=request.user,
-            note="Listing created.",
-        )
-        messages.success(request, "Your post is live.")
-        return redirect("post-detail", post_id=post.pk)
-    return render(request, "core/post_form.html", {"form": form})
+    challenge = _human_check(request)
+    form = ItemPostForm(request.POST or None, request.FILES or None, human_check_answer=challenge["answer"])
+    if request.method == "POST":
+        if _posting_rate_limited(request.user):
+            messages.error(request, f"You can create up to {POSTS_PER_HOUR_LIMIT} posts per hour. Please try again later.")
+            return redirect("my-posts")
+        if form.is_valid():
+            with transaction.atomic():
+                post = form.save(commit=False)
+                post.author = request.user
+                post.save()
+                form.save_photos(post)
+                if post.post_type == ItemPost.Type.FOUND:
+                    for order, text in enumerate(form.question_texts(), start=1):
+                        VerificationQuestion.objects.create(post=post, order=order, text=text)
+                PostStatusEvent.objects.create(
+                    post=post,
+                    previous_status="",
+                    new_status=post.status,
+                    actor=request.user,
+                    note="Listing created.",
+                )
+            _human_check(request, refresh=True)
+            messages.success(request, "Your post is live.")
+            return redirect("post-detail", post_id=post.pk)
+        challenge = _human_check(request, refresh=True)
+        form.human_check_answer = challenge["answer"]
+    return render(request, "core/post_form.html", {"form": form, "human_check_question": challenge["question"]})
 
 
 @login_required
@@ -199,9 +244,12 @@ def edit_post(request, post_id):
     post = get_object_or_404(ItemPost, pk=post_id)
     if post.author_id != request.user.pk and not is_admin(request.user):
         return HttpResponseForbidden("Only the post author or an administrator may edit this post.")
-    form = ItemPostForm(request.POST or None, request.FILES or None, instance=post)
+    challenge = _human_check(request)
+    form = ItemPostForm(request.POST or None, request.FILES or None, instance=post, human_check_answer=challenge["answer"])
     if request.method == "POST" and form.is_valid():
-        updated = form.save()
+        with transaction.atomic():
+            updated = form.save()
+            form.save_photos(updated)
         if not post.claims.exists():
             if updated.post_type == ItemPost.Type.FOUND:
                 updated.verification_questions.all().delete()
@@ -219,7 +267,12 @@ def edit_post(request, post_id):
         if post.claims.exists():
             form.fields[f"question_{index}"].disabled = True
             form.fields[f"question_{index}"].help_text = "Locked after a claim is submitted so earlier answers stay attached to their questions."
-    return render(request, "core/post_form.html", {"form": form, "editing": True, "post": post})
+    if request.method == "POST" and not form.is_valid():
+        challenge = _human_check(request, refresh=True)
+        form.human_check_answer = challenge["answer"]
+    return render(request, "core/post_form.html", {
+        "form": form, "editing": True, "post": post, "human_check_question": challenge["question"],
+    })
 
 
 @login_required
@@ -286,13 +339,21 @@ def add_comment(request, post_id):
 
 @login_required
 def my_posts(request):
-    posts = ItemPost.objects.filter(author=request.user).order_by("-created_at")
+    posts = (
+        ItemPost.objects.filter(author=request.user)
+        .select_related("category").prefetch_related("photos", "claims")
+        .order_by("-created_at")
+    )
     return render(request, "core/my_posts.html", {"posts": posts})
 
 
 @login_required
 def my_claims(request):
-    claims = ClaimApplication.objects.filter(claimant=request.user).select_related("post", "post__author")
+    claims = (
+        ClaimApplication.objects.filter(claimant=request.user)
+        .select_related("post", "post__author", "post__category")
+        .prefetch_related("post__photos")
+    )
     return render(request, "core/my_claims.html", {"claims": claims})
 
 
@@ -605,3 +666,31 @@ def staff_moderate_comment(request, comment_id):
     audit(request.user, f"comment_{action.lower()}", comment, "Comment moderation action.")
     messages.success(request, "Comment moderation updated.")
     return redirect("post-detail", post_id=comment.post_id)
+
+
+@login_required
+def admin_categories(request):
+    if not is_admin(request.user):
+        return HttpResponseForbidden("Administrator access is required.")
+    form = CategoryForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        category = form.save()
+        audit(request.user, "created_category", category, category.name)
+        messages.success(request, f"Category “{category.name}” added.")
+        return redirect("admin-categories")
+    categories = Category.objects.annotate(post_count=Count("posts")).order_by("sort_order", "name")
+    return render(request, "core/admin_categories.html", {"form": form, "categories": categories})
+
+
+@login_required
+def admin_category_edit(request, category_id):
+    if not is_admin(request.user):
+        return HttpResponseForbidden("Administrator access is required.")
+    category = get_object_or_404(Category, pk=category_id)
+    form = CategoryForm(request.POST or None, instance=category)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        audit(request.user, "updated_category", category, f"{category.name} · active={category.is_active}")
+        messages.success(request, "Category saved.")
+        return redirect("admin-categories")
+    return render(request, "core/admin_category_edit.html", {"form": form, "category": category})

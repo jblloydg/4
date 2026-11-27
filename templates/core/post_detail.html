@@ -1,20 +1,24 @@
 {% extends "core/base.html" %}
-{% block title %}{{ post.title }} · Find-IT{% endblock %}
+{% block title %}{{ post.display_title }} · Find-IT{% endblock %}
 {% block content %}
 <section class="page-wrap detail-page">
   <a class="back-link" href="{% if user.is_authenticated %}{% url 'home' %}{% else %}{% url 'landing' %}{% endif %}">← Back to listings</a>
   {% if post.is_archived %}<div class="archive-banner"><strong>Archived listing</strong><span>This post is hidden from active search. Its history and conversations are retained.</span></div>{% endif %}
   <div class="detail-layout">
     <article class="detail-main">
-      <div class="detail-media">
-        {% if post.photo %}<img src="{{ post.photo.url }}" alt="Broad exterior view of {{ post.title }}">{% else %}<div class="detail-placeholder"><span>◈</span><p>No photo was added</p></div>{% endif %}
+      {% with photos=post.photos.all %}
+      <div class="detail-media{% if photos|length > 1 %} detail-gallery{% endif %}" tabindex="0" aria-label="Item photos">
+        {% for photo in photos %}<figure class="gallery-slide" id="photo-{{ forloop.counter }}"><img src="{{ photo.image.url }}" alt="Photo {{ forloop.counter }} of {{ post.display_title }}"{% if not forloop.first %} loading="lazy"{% endif %}></figure>
+        {% empty %}<div class="detail-placeholder"><span>◈</span><p>No photo was added</p></div>{% endfor %}
       </div>
+      {% if photos|length > 1 %}<nav class="gallery-thumbs" aria-label="Choose photo">{% for photo in photos %}<a href="#photo-{{ forloop.counter }}"><img src="{{ photo.image.url }}" alt="Show photo {{ forloop.counter }}" loading="lazy"></a>{% endfor %}</nav>{% endif %}
+      {% endwith %}
       <div class="detail-heading">
-        <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span><span class="status-pill status-{{ post.status|lower }}">{{ post.get_status_display }}</span></div>
-        <h1>{{ post.title }}</h1>
+        <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span>{% if post.category %}<span class="subtle-chip">{{ post.category.name }}</span>{% endif %}<span class="status-pill status-{{ post.status|lower }}">{{ post.get_status_display }}</span></div>
+        <h1>{{ post.display_title }}</h1>
         <p class="detail-author">Posted by <strong>{{ post.author.first_name|default:post.author.username }}</strong>{% if post.approximate_date %} · Approx. {{ post.approximate_date|date:"M j, Y" }}{% endif %}</p>
       </div>
-      <div class="description-panel"><span class="eyebrow">Broad description</span><p>{{ post.description|linebreaksbr }}</p></div>
+      {% if post.description %}<div class="description-panel"><span class="eyebrow">Broad description</span><p>{{ post.description|linebreaksbr }}</p></div>{% endif %}
       {% if post.status == "TURNED_OVER" %}<div class="form-callout guardhouse-callout"><strong>At the guard house</strong><span>Online claims are closed. Pickup is handled in person within school premises.</span></div>{% endif %}
       {% if post.status == "RETURNED" and user_claim and post.returned_application_id == user_claim.pk %}
       <div class="claim-notice"><strong>Finder recorded a return to you.</strong><span>Confirm receipt after you physically have the item.</span>

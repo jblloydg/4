@@ -3,8 +3,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .models import (
-    AbuseReport, ClaimAnswer, ClaimApplication, ChatMessage, Comment, Conversation,
-    InAppNotification, ItemPost, PostStatusEvent, Profile, StaffAuditLog,
+    AbuseReport, Category, ClaimAnswer, ClaimApplication, ChatMessage, Comment, Conversation,
+    InAppNotification, ItemPost, PostPhoto, PostStatusEvent, Profile, StaffAuditLog,
     SystemSettings, VerificationQuestion,
 )
 
@@ -28,6 +28,20 @@ class UserAdmin(BaseUserAdmin):
     list_display = ("username", "first_name", "is_active", "is_staff", "is_superuser")
 
 
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "sort_order", "is_active")
+    list_editable = ("sort_order", "is_active")
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class PostPhotoInline(admin.TabularInline):
+    model = PostPhoto
+    extra = 0
+
+
 class VerificationQuestionInline(admin.TabularInline):
     model = VerificationQuestion
     extra = 0
@@ -35,14 +49,14 @@ class VerificationQuestionInline(admin.TabularInline):
 
 @admin.register(ItemPost)
 class ItemPostAdmin(admin.ModelAdmin):
-    list_display = ("title", "post_type", "status", "author", "is_archived", "created_at")
-    list_filter = ("post_type", "status", "is_archived")
+    list_display = ("display_title", "post_type", "category", "status", "author", "is_archived", "created_at")
+    list_filter = ("post_type", "category", "status", "is_archived")
     search_fields = ("title", "description", "author__username")
     readonly_fields = (
         "status", "returned_application", "claimed_by_user", "turned_over_at",
         "claimed_at", "closed_at", "is_archived", "archived_at", "created_at", "updated_at",
     )
-    inlines = [VerificationQuestionInline]
+    inlines = [PostPhotoInline, VerificationQuestionInline]
 
     def has_delete_permission(self, request, obj=None):
         return False

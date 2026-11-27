@@ -9,10 +9,29 @@
     {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
     <label>Post type{{ form.post_type }}<small class="form-help">Choose Lost if you are looking for an item, or Found if you have an item.</small></label>
     {% if form.post_type.errors %}<div class="field-error">{{ form.post_type.errors }}</div>{% endif %}
-    <label>Broad title{{ form.title }}</label>{% if form.title.errors %}<div class="field-error">{{ form.title.errors }}</div>{% endif %}
-    <label>Description{{ form.description }}<small class="form-help">Avoid exact serial numbers, hidden markings, or personal details.</small></label>{% if form.description.errors %}<div class="field-error">{{ form.description.errors }}</div>{% endif %}
+    <label>Category{{ form.category }}<small class="form-help">Required. Helps people browse and filters the ownership questions.</small></label>
+    {% if form.category.errors %}<div class="field-error">{{ form.category.errors }}</div>{% endif %}
+    <fieldset class="photo-editor">
+      <legend>Photos <span class="required-mark">required</span></legend>
+      {% if editing and post.photos.all %}
+      <div class="photo-manage-grid">
+        {% for photo in post.photos.all %}
+        <label class="photo-manage-item"><img src="{{ photo.image.url }}" alt="Photo {{ forloop.counter }}"><span><input type="checkbox" name="remove_photos" value="{{ photo.pk }}"> Remove</span></label>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {{ form.photos }}
+      <small class="form-help">{{ form.photos.help_text }} Photograph the outside only. Hide names, ID numbers and faces.</small>
+      <p class="photo-count muted" id="photo-count" aria-live="polite"></p>
+      {% if form.photos.errors %}<div class="field-error">{{ form.photos.errors }}</div>{% endif %}
+      <div class="human-check" id="human-check" data-threshold="10" data-existing="{% if editing %}{{ post.photos.count }}{% else %}0{% endif %}">
+        <label>{{ human_check_question }} <small class="form-help">Needed only when a post has more than 10 photos.</small>{{ form.human_check }}</label>
+        {% if form.human_check.errors %}<div class="field-error">{{ form.human_check.errors }}</div>{% endif %}
+      </div>
+    </fieldset>
+    <label>{{ form.title.label }}{{ form.title }}</label>{% if form.title.errors %}<div class="field-error">{{ form.title.errors }}</div>{% endif %}
+    <label>{{ form.description.label }}{{ form.description }}<small class="form-help">Avoid exact serial numbers, hidden markings, or personal details.</small></label>{% if form.description.errors %}<div class="field-error">{{ form.description.errors }}</div>{% endif %}
     <label>Approximate date{{ form.approximate_date }}</label>{% if form.approximate_date.errors %}<div class="field-error">{{ form.approximate_date.errors }}</div>{% endif %}
-    <label>Optional exterior photo{{ form.photo }}<small class="form-help">JPG, PNG, or WebP; up to 5 MB. Photograph the outside only.</small></label>{% if form.photo.errors %}<div class="field-error">{{ form.photo.errors }}</div>{% endif %}
     <div id="verification-questions" class="question-editor">
       <div><span class="eyebrow">Private ownership check</span><h2>Write five questions</h2><p class="muted">These questions are hidden from the public. Avoid clues already visible in the post or photo.</p></div>
       {% for field in form %}{% if "question_" in field.name %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endif %}{% endfor %}

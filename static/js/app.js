@@ -84,6 +84,30 @@ document.addEventListener("DOMContentLoaded", function () {
     updateQuestions();
   }
 
+  var photoInput = document.querySelector("input[type='file'][name='photos']");
+  var humanCheck = document.getElementById("human-check");
+  var photoCount = document.getElementById("photo-count");
+  function updatePhotoState() {
+    if (!photoInput) return;
+    var existing = humanCheck ? parseInt(humanCheck.getAttribute("data-existing") || "0", 10) : 0;
+    var removing = document.querySelectorAll("input[name='remove_photos']:checked").length;
+    var adding = photoInput.files ? photoInput.files.length : 0;
+    var total = existing - removing + adding;
+    if (photoCount) photoCount.textContent = total ? total + " of 20 photos" + (total > 20 ? " — remove some to continue" : "") : "";
+    if (humanCheck) {
+      var threshold = parseInt(humanCheck.getAttribute("data-threshold") || "10", 10);
+      var needed = adding > 0 && total > threshold;
+      humanCheck.hidden = !needed && !humanCheck.querySelector(".field-error");
+      var answer = humanCheck.querySelector("input");
+      if (answer) answer.required = needed;
+    }
+  }
+  if (photoInput) {
+    photoInput.addEventListener("change", updatePhotoState);
+    document.querySelectorAll("input[name='remove_photos']").forEach(function (box) { box.addEventListener("change", updatePhotoState); });
+    updatePhotoState();
+  }
+
   var params = new URLSearchParams(window.location.search);
   if (params.get("resume") === "claim") {
     var claim = document.getElementById("claim-form");

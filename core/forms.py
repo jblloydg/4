@@ -5,11 +5,16 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 from django.core.exceptions import ValidationError
 
-from .models import ItemPost, SystemSettings, AbuseReport, Profile
+from django.db import models
+from django.db.models import Q
+
+from .models import AbuseReport, Category, ItemPost, PostPhoto, Profile, SystemSettings
 from .validators import validate_photo
 
 User = get_user_model()
 STUDENT_ID_PATTERN = re.compile(r"^\d{4}-\d{4}$")
+MAX_POST_PHOTOS = 20
+HUMAN_CHECK_PHOTO_THRESHOLD = 10
 
 
 class FindItLoginForm(AuthenticationForm):
@@ -98,7 +103,47 @@ class StaffAccountForm(forms.Form):
         return user
 
 
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleImageField(forms.ImageField):
+    """Accepts several images in one input. Each file is checked by Pillow and validate_photo."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("widget", MultipleFileInput(attrs={"accept": "image/jpeg,image/png,image/webp", "multiple": True}))
+        super().__init__(*args, **kwargs)
+
+    def clean(self, data, initial=None):
+        single_clean = super().clean
+        if isinstance(data, (list, tuple)):
+            files = [single_clean(item, initial) for item in data if item]
+        elif data:
+            files = [single_clean(data, initial)]
+        else:
+            files = []
+        for item in files:
+            validate_photo(item)
+        return files
+
+
 class ItemPostForm(forms.ModelForm):
+    """Create/edit a post. Photos (1-20) and a category are required; title and
+    description are optional, like a social-media post."""
+
+    photos = MultipleImageField(
+        required=False,
+        label="Photos",
+        help_text=f"Add 1 to {MAX_POST_PHOTOS} photos (JPG, PNG or WebP, up to 5 MB each). No video.",
+    )
+    remove_photos = forms.ModelMultipleChoiceField(
+        queryset=PostPhoto.objects.none(), required=False,
+        widget=forms.CheckboxSelectMultiple, label="Remove photos",
+    )
+    human_check = forms.CharField(
+        required=False, max_length=8, label="Quick check",
+        widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "off"}),
+    )
     question_1 = forms.CharField(max_length=240, required=False, label="Private question 1")
     question_2 = forms.CharField(max_length=240, required=False, label="Private question 2")
     question_3 = forms.CharField(max_length=240, required=False, label="Private question 3")
@@ -107,23 +152,47 @@ class ItemPostForm(forms.ModelForm):
 
     class Meta:
         model = ItemPost
-        fields = ["post_type", "title", "description", "approximate_date", "photo"]
+        fields = ["post_type", "category", "title", "description", "approximate_date"]
         widgets = {
             "post_type": forms.Select(attrs={"data-post-type": "true"}),
-            "title": forms.TextInput(attrs={"placeholder": "A broad name, such as blue water bottle"}),
-            "description": forms.Textarea(attrs={"rows": 4, "placeholder": "Describe visible details without revealing private identifiers."}),
+            "category": forms.Select(attrs={"data-category": "true"}),
+            "title": forms.TextInput(attrs={"placeholder": "Optional: a broad name, such as blue water bottle"}),
+            "description": forms.Textarea(attrs={"rows": 4, "placeholder": "Optional: describe visible details without revealing private identifiers."}),
             "approximate_date": forms.DateInput(attrs={"type": "date"}),
-            "photo": forms.ClearableFileInput(attrs={"accept": "image/jpeg,image/png,image/webp"}),
         }
+        labels = {"title": "Title (optional)", "description": "Description (optional)"}
 
-    def clean_photo(self):
-        photo = self.cleaned_data.get("photo")
-        if photo:
-            validate_photo(photo)
-        return photo
+    def __init__(self, *args, human_check_answer=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.human_check_answer = human_check_answer
+        categories = Category.objects.filter(is_active=True)
+        if self.instance.pk and self.instance.category_id:
+            categories = Category.objects.filter(Q(is_active=True) | Q(pk=self.instance.category_id))
+        self.fields["category"].queryset = categories
+        self.fields["category"].required = True
+        self.fields["category"].empty_label = "Choose a category"
+        if self.instance.pk:
+            self.fields["remove_photos"].queryset = self.instance.photos.all()
+
+    def existing_photo_count(self):
+        return self.instance.photos.count() if self.instance.pk else 0
 
     def clean(self):
         cleaned = super().clean()
+        new_photos = cleaned.get("photos") or []
+        removing = cleaned.get("remove_photos") or []
+        total = self.existing_photo_count() - len(removing) + len(new_photos)
+        if total < 1:
+            self.add_error("photos", "Add at least one photo of the item.")
+        elif total > MAX_POST_PHOTOS:
+            self.add_error("photos", f"A post can have at most {MAX_POST_PHOTOS} photos. You selected {total}.")
+        elif new_photos and total > HUMAN_CHECK_PHOTO_THRESHOLD:
+            answer = (cleaned.get("human_check") or "").strip()
+            if not self.human_check_answer or answer != str(self.human_check_answer):
+                self.add_error(
+                    "human_check",
+                    f"Uploading more than {HUMAN_CHECK_PHOTO_THRESHOLD} photos needs the quick check. Enter the answer shown.",
+                )
         if cleaned.get("post_type") == ItemPost.Type.FOUND:
             questions = [cleaned.get(f"question_{n}", "").strip() for n in range(1, 6)]
             if any(not question for question in questions):
@@ -134,6 +203,15 @@ class ItemPostForm(forms.ModelForm):
 
     def question_texts(self):
         return [self.cleaned_data[f"question_{n}"].strip() for n in range(1, 6)]
+
+    def save_photos(self, post):
+        """Apply photo removals and additions after the post itself is saved."""
+        for photo in self.cleaned_data.get("remove_photos") or []:
+            photo.image.delete(save=False)
+            photo.delete()
+        next_order = (post.photos.aggregate(models.Max("order"))["order__max"] or 0) + 1
+        for offset, upload in enumerate(self.cleaned_data.get("photos") or []):
+            PostPhoto.objects.create(post=post, image=upload, order=next_order + offset)
 
 
 class CommentForm(forms.Form):
@@ -196,3 +274,26 @@ class AdminReviewForm(forms.Form):
 
 class CloseReasonForm(forms.Form):
     reason = forms.CharField(max_length=240, required=False, label="Reason (optional)")
+
+
+class CategoryForm(forms.ModelForm):
+    class Meta:
+        model = Category
+        fields = ["name", "sort_order", "is_active"]
+        labels = {"sort_order": "Display order (lower shows first)", "is_active": "Active (shown on the post form)"}
+
+    def clean_name(self):
+        name = self.cleaned_data["name"].strip()
+        clash = Category.objects.filter(name__iexact=name)
+        if self.instance.pk:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise ValidationError("A category with that name already exists.")
+        return name
+
+    def clean_is_active(self):
+        active = self.cleaned_data["is_active"]
+        if not active and self.instance.pk and self.instance.is_active:
+            if Category.objects.filter(is_active=True).exclude(pk=self.instance.pk).count() == 0:
+                raise ValidationError("Keep at least one category active.")
+        return active

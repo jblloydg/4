@@ -3,13 +3,13 @@
 {% block content %}
 <section class="page-wrap">
   <div class="page-heading"><div><span class="eyebrow">Authorized staff</span><h1>Staff workspace</h1><p class="muted">Assist with private verification, record guard-house custody, and review safety reports.</p></div>
-    {% if is_admin %}<div class="button-row"><a class="button button-soft" href="{% url 'staff-accounts' %}">Staff accounts</a><a class="button button-outline" href="{% url 'admin-settings' %}">System timers</a><a class="button button-outline" href="{% url 'admin-reports' %}">Reports</a></div>{% endif %}
+    {% if is_admin %}<div class="button-row"><a class="button button-soft" href="{% url 'staff-accounts' %}">Staff accounts</a><a class="button button-outline" href="{% url 'admin-categories' %}">Categories</a><a class="button button-outline" href="{% url 'admin-settings' %}">System timers</a><a class="button button-outline" href="{% url 'admin-reports' %}">Reports</a></div>{% endif %}
   </div>
   <div class="staff-stats"><div class="stat-card"><span>Active posts</span><strong>{{ posts|length }}</strong></div><div class="stat-card"><span>Pending reports</span><strong>{{ recent_reports|length }}</strong></div><div class="stat-card"><span>Chat access</span><strong>Authorized review</strong></div></div>
   <div class="staff-columns">
     <section class="panel"><div class="section-heading"><div><span class="eyebrow">Campus listings</span><h2>Open items</h2></div></div>
       {% for post in posts %}
-      <article class="staff-row"><div><div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span><span class="status-dot">{{ post.get_status_display }}</span></div><h3><a href="{% url 'post-detail' post.pk %}">{{ post.title }}</a></h3><small>By {{ post.author.first_name|default:post.author.username }} · {{ post.claims.count }} claims</small></div><a class="button button-soft button-small" href="{% url 'post-detail' post.pk %}">Review</a></article>
+      <article class="staff-row"><div><div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span><span class="status-dot">{{ post.get_status_display }}</span></div><h3><a href="{% url 'post-detail' post.pk %}">{{ post.display_title }}</a></h3><small>By {{ post.author.first_name|default:post.author.username }} · {{ post.claims.count }} claims</small></div><a class="button button-soft button-small" href="{% url 'post-detail' post.pk %}">Review</a></article>
       {% empty %}<p class="muted">No active listings.</p>{% endfor %}
     </section>
     <section class="panel"><div class="section-heading"><div><span class="eyebrow">Safety review</span><h2>Recent reports</h2></div>{% if is_admin %}<a class="text-action" href="{% url 'admin-reports' %}">View all</a>{% endif %}</div>
@@ -20,7 +20,7 @@
     </section>
   </div>
   <section class="panel"><div class="section-heading"><div><span class="eyebrow">Private messages</span><h2>Conversation review</h2><p class="muted">Authorized staff may review any conversation. Access is recorded.</p></div></div>
-    {% for chat in conversations %}<article class="staff-row"><div><h3><a href="{% url 'chat-room' chat.pk %}">{{ chat.post.title }}</a></h3><small>{{ chat.initiator.first_name|default:chat.initiator.username }} ↔ {{ chat.recipient.first_name|default:chat.recipient.username }} · {{ chat.updated_at|date:"M j, Y · g:i a" }}</small></div><span class="subtle-chip">{% if chat.is_paused %}Paused{% elif chat.is_closed %}Read-only{% else %}Open{% endif %}</span><a class="button button-soft button-small" href="{% url 'chat-room' chat.pk %}">Review</a></article>
+    {% for chat in conversations %}<article class="staff-row"><div><h3><a href="{% url 'chat-room' chat.pk %}">{{ chat.post.display_title }}</a></h3><small>{{ chat.initiator.first_name|default:chat.initiator.username }} ↔ {{ chat.recipient.first_name|default:chat.recipient.username }} · {{ chat.updated_at|date:"M j, Y · g:i a" }}</small></div><span class="subtle-chip">{% if chat.is_paused %}Paused{% elif chat.is_closed %}Read-only{% else %}Open{% endif %}</span><a class="button button-soft button-small" href="{% url 'chat-room' chat.pk %}">Review</a></article>
     {% empty %}<p class="muted">No conversations yet.</p>{% endfor %}
   </section>
 </section>

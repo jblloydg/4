@@ -22,6 +22,21 @@ class Profile(models.Model):
         return self.user.get_full_name() or self.user.username
 
 
+class Category(models.Model):
+    """Item category, managed by administrators. Required on every post."""
+    name = models.CharField(max_length=60, unique=True)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveSmallIntegerField(default=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        verbose_name_plural = "categories"
+
+    def __str__(self):
+        return self.name
+
+
 class ItemPost(models.Model):
     class Type(models.TextChoices):
         LOST = "LOST", "Lost"
@@ -38,10 +53,13 @@ class ItemPost(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="item_posts")
     post_type = models.CharField(max_length=5, choices=Type.choices)
-    title = models.CharField(max_length=120)
-    description = models.TextField(max_length=1600)
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, null=True, blank=True, related_name="posts",
+        help_text="Required for new posts. Older rows may be blank until edited.",
+    )
+    title = models.CharField(max_length=120, blank=True)
+    description = models.TextField(max_length=1600, blank=True)
     approximate_date = models.DateField(null=True, blank=True)
-    photo = models.ImageField(upload_to="item-photos/%Y/%m/", validators=[validate_photo], blank=True, null=True)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.OPEN)
     returned_application = models.ForeignKey(
         "ClaimApplication", on_delete=models.SET_NULL, null=True, blank=True,
@@ -64,7 +82,23 @@ class ItemPost(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return self.title
+        return self.display_title
+
+    @property
+    def display_title(self):
+        """Title is optional; fall back to the category so lists stay readable."""
+        if self.title:
+            return self.title
+        if self.category_id:
+            return f"{self.get_post_type_display()} {self.category.name.lower()}"
+        return f"{self.get_post_type_display()} item"
+
+    @property
+    def cover_photo(self):
+        photos = getattr(self, "_prefetched_objects_cache", {}).get("photos")
+        if photos is not None:
+            return photos[0] if photos else None
+        return self.photos.order_by("order", "pk").first()
 
     @property
     def can_accept_claims(self):
@@ -77,6 +111,20 @@ class ItemPost(models.Model):
     @property
     def author_name(self):
         return self.author.get_full_name() or self.author.username
+
+
+class PostPhoto(models.Model):
+    """One of 1-20 photos attached to a post. Photos are required; video is not allowed."""
+    post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="photos")
+    image = models.ImageField(upload_to="item-photos/%Y/%m/", validators=[validate_photo])
+    order = models.PositiveSmallIntegerField(default=0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "pk"]
+
+    def __str__(self):
+        return f"Photo {self.order} for {self.post}"
 
 
 class VerificationQuestion(models.Model):

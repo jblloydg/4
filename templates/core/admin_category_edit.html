@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+{% block title %}Edit category · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page">
+  <a class="back-link" href="{% url 'admin-categories' %}">← Categories</a>
+  <div class="panel settings-panel">
+    <span class="eyebrow">Administrator only</span><h1>Edit “{{ category.name }}”</h1>
+    <form method="post" class="stack-form">{% csrf_token %}
+      {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+      <label>Name{{ form.name }}</label>{% if form.name.errors %}<div class="field-error">{{ form.name.errors }}</div>{% endif %}
+      <label>{{ form.sort_order.label }}{{ form.sort_order }}</label>
+      <label class="checkbox-label">{{ form.is_active }} {{ form.is_active.label }}</label>{% if form.is_active.errors %}<div class="field-error">{{ form.is_active.errors }}</div>{% endif %}
+      <p class="fine-print">Turning a category off hides it from the post form and browse filter. Posts that already use it keep it.</p>
+      <button class="button button-primary" type="submit">Save category</button>
+    </form>
+  </div>
+</section>
+{% endblock %}
