@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Create account · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page">
+  <div class="auth-card">
+    <span class="eyebrow">Student demo account</span><h1>Create your account</h1>
+    <p class="muted">This local demo checks the ID format only. It does not verify enrollment. Use fictional details for testing.</p>
+    <form method="post" class="stack-form">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+      {% for field in form %}
+      <label>{{ field.label }}{{ field }}{% if field.help_text %}<small class="form-help">{{ field.help_text }}</small>{% endif %}</label>
+      {% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}
+      {% endfor %}
+      <button class="button button-primary button-full" type="submit">Create account</button>
+    </form>
+    <p class="fine-print center">Staff accounts are created by an administrator.</p>
+  </div>
+</section>
+{% endblock %}

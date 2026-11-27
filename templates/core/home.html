@@ -1,0 +1,42 @@
+{% extends "core/base.html" %}
+{% block title %}Browse items · Find-IT{% endblock %}
+{% block content %}
+<section class="page-wrap page-heading">
+  <div>
+    <span class="eyebrow">Campus item board</span>
+    <h1>Find what’s missing.</h1>
+    <p class="muted">Keep descriptions broad. Verify ownership privately.</p>
+  </div>
+  <a class="button button-primary" href="{% url 'create-post' %}">＋ Create post</a>
+</section>
+<section class="page-wrap">
+  <form class="search-panel" method="get" action="{% url 'home' %}">
+    <label class="search-field"><span aria-hidden="true">⌕</span><input type="search" name="q" value="{{ q }}" placeholder="Search by broad item details" aria-label="Search listings"></label>
+    <label class="select-field"><span class="sr-only">Type</span><select name="type"><option value="">All posts</option><option value="LOST" {% if selected_type == "LOST" %}selected{% endif %}>Lost</option><option value="FOUND" {% if selected_type == "FOUND" %}selected{% endif %}>Found</option></select></label>
+    <label class="select-field"><span class="sr-only">Status</span><select name="status"><option value="">Any status</option>{% for value,label in status_choices %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <button class="button button-outline" type="submit">Search</button>
+  </form>
+  <div class="result-heading"><h2>Recent listings</h2><span class="muted">{{ posts|length }} shown</span></div>
+  <div class="post-grid">
+    {% for post in posts %}
+    <article class="post-card">
+      <a class="post-card-link" href="{% url 'post-detail' post.pk %}">
+        {% if post.photo %}<img class="post-photo" src="{{ post.photo.url }}" alt="Broad exterior view of {{ post.title }}">{% else %}<div class="post-photo photo-placeholder"><span aria-hidden="true">◈</span><small>No photo added</small></div>{% endif %}
+        <div class="post-card-body">
+          <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span><span class="status-dot">{{ post.get_status_display }}</span></div>
+          <h3>{{ post.title }}</h3>
+          <p class="clamp-3">{{ post.description }}</p>
+          <div class="post-card-foot"><span>{{ post.author.first_name|default:post.author.username }}</span>{% if post.approximate_date %}<span>{{ post.approximate_date|date:"M j, Y" }}</span>{% endif %}</div>
+        </div>
+      </a>
+    </article>
+    {% empty %}
+    <div class="empty-state">
+      <div class="empty-icon">⌕</div><h3>No listings match that search</h3>
+      <p>Try another word or clear the filters.</p>
+      <a class="button button-soft" href="{% url 'home' %}">Clear search</a>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

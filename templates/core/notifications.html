@@ -1,0 +1,12 @@
+{% extends "core/base.html" %}
+{% block title %}Updates · Find-IT{% endblock %}
+{% block content %}
+<section class="page-wrap">
+  <div class="page-heading"><div><span class="eyebrow">In-app updates</span><h1>Notifications</h1><p class="muted">Claimants receive status updates without seeing other people’s identities.</p></div></div>
+  <div class="notification-list">
+    {% for item in notifications %}
+    <a class="notification-row" href="{% url 'post-detail' item.post.pk %}"><span class="notification-mark">•</span><div><p>{{ item.text }}</p><small>{{ item.created_at|date:"M j, Y · g:i a" }} · {{ item.post.title }}</small></div></a>
+    {% empty %}<div class="empty-state"><div class="empty-icon">◷</div><h3>You’re all caught up</h3><p>Updates about your posts and claims will appear here.</p></div>{% endfor %}
+  </div>
+</section>
+{% endblock %}

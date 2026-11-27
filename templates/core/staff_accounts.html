@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Staff accounts · Find-IT{% endblock %}
+{% block content %}
+<section class="page-wrap">
+  <a class="back-link" href="{% url 'staff-dashboard' %}">← Staff workspace</a>
+  <div class="page-heading"><div><span class="eyebrow">Administrator only</span><h1>Staff accounts</h1><p class="muted">Administrators create staff access. Staff accounts cannot edit the website layout.</p></div></div>
+  <div class="two-column">
+    <section class="panel"><h2>Create staff account</h2><form method="post" class="stack-form">{% csrf_token %}
+      {% for field in form %}<label>{{ field.label }}{{ field }}{% if field.help_text %}<small class="form-help">{{ field.help_text }}</small>{% endif %}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endfor %}
+      <button class="button button-primary" type="submit">Create staff account</button>
+    </form></section>
+    <section class="panel"><h2>Current staff</h2>
+      {% for staff in staff_users %}<div class="staff-row"><div><strong>{{ staff.first_name|default:staff.username }}</strong><small>{{ staff.username }} · {% if staff.is_active %}Active{% else %}Suspended{% endif %}</small></div></div>{% empty %}<p class="muted">No staff accounts yet.</p>{% endfor %}
+    </section>
+  </div>
+</section>
+{% endblock %}

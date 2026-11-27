@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+{% block title %}System timers · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page">
+  <a class="back-link" href="{% url 'staff-dashboard' %}">← Staff workspace</a>
+  <div class="panel settings-panel">
+    <span class="eyebrow">Administrator only</span><h1>System timers</h1>
+    <p class="muted">Leave a timer blank to keep it disabled. These settings are stored in the database, not hard-coded in the website.</p>
+    <form method="post" class="stack-form">{% csrf_token %}
+      <label>Guard-house grace period (days){{ form.guardhouse_grace_days }}<small class="form-help">After an item is turned over, the listing auto-closes after this many days. Blank means it stays open until manually closed.</small></label>{% if form.guardhouse_grace_days.errors %}<div class="field-error">{{ form.guardhouse_grace_days.errors }}</div>{% endif %}
+      <label>Archived post auto-delete (days){{ form.archive_purge_days }}<small class="form-help">After a post is archived, permanently remove its post, claims, photo, and chat together after this many days. Blank means keep history until an authorized person removes it.</small></label>{% if form.archive_purge_days.errors %}<div class="field-error">{{ form.archive_purge_days.errors }}</div>{% endif %}
+      <div class="form-callout warning-callout"><strong>Reports are protected</strong><span>A post connected to a pending safety report is not permanently deleted until the report is resolved.</span></div>
+      <button class="button button-primary" type="submit">Save timer settings</button>
+    </form>
+    <p class="fine-print">Last updated {% if settings_row.updated_by %}by {{ settings_row.updated_by.first_name|default:settings_row.updated_by.username }}{% else %}not yet changed{% endif %}{% if settings_row.updated_at %} · {{ settings_row.updated_at|date:"M j, Y · g:i a" }}{% endif %}</p>
+  </div>
+</section>
+{% endblock %}

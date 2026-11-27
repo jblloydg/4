@@ -1,0 +1,141 @@
+{% extends "core/base.html" %}
+{% block title %}{{ post.title }} · Find-IT{% endblock %}
+{% block content %}
+<section class="page-wrap detail-page">
+  <a class="back-link" href="{% if user.is_authenticated %}{% url 'home' %}{% else %}{% url 'landing' %}{% endif %}">← Back to listings</a>
+  {% if post.is_archived %}<div class="archive-banner"><strong>Archived listing</strong><span>This post is hidden from active search. Its history and conversations are retained.</span></div>{% endif %}
+  <div class="detail-layout">
+    <article class="detail-main">
+      <div class="detail-media">
+        {% if post.photo %}<img src="{{ post.photo.url }}" alt="Broad exterior view of {{ post.title }}">{% else %}<div class="detail-placeholder"><span>◈</span><p>No photo was added</p></div>{% endif %}
+      </div>
+      <div class="detail-heading">
+        <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span><span class="status-pill status-{{ post.status|lower }}">{{ post.get_status_display }}</span></div>
+        <h1>{{ post.title }}</h1>
+        <p class="detail-author">Posted by <strong>{{ post.author.first_name|default:post.author.username }}</strong>{% if post.approximate_date %} · Approx. {{ post.approximate_date|date:"M j, Y" }}{% endif %}</p>
+      </div>
+      <div class="description-panel"><span class="eyebrow">Broad description</span><p>{{ post.description|linebreaksbr }}</p></div>
+      {% if post.status == "TURNED_OVER" %}<div class="form-callout guardhouse-callout"><strong>At the guard house</strong><span>Online claims are closed. Pickup is handled in person within school premises.</span></div>{% endif %}
+      {% if post.status == "RETURNED" and user_claim and post.returned_application_id == user_claim.pk %}
+      <div class="claim-notice"><strong>Finder recorded a return to you.</strong><span>Confirm receipt after you physically have the item.</span>
+        <form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary" type="submit">Confirm I received it</button></form>
+      </div>
+      {% endif %}
+
+      {% if post.post_type == "FOUND" and post.can_accept_claims and user.is_authenticated and user.pk != post.author_id and not user_claim %}
+      <section class="claim-card" id="claim-form">
+        <div><span class="eyebrow">Private ownership check</span><h2>Claim this item</h2><p class="muted">Your answers are visible to the finder and authorized staff, not to other claimants.</p></div>
+        <form method="post" action="{% url 'submit-claim' post.pk %}" class="stack-form">
+          {% csrf_token %}
+          {% for field in claim_form %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endfor %}
+          <div class="form-callout"><strong>Plan a safe hand-off</strong><span>Meet only within school premises. Find-IT does not deliver items.</span></div>
+          <button class="button button-primary" type="submit">Submit private claim</button>
+        </form>
+      </section>
+      {% elif post.post_type == "FOUND" and post.status == "TURNED_OVER" %}
+      <section class="claim-card">
+        <span class="eyebrow">In-person pickup</span><h2>Online claims are closed</h2>
+        <p class="muted">This item is at the guard house. Ask staff in person; the public post does not reveal the claimant’s identity.</p>
+      </section>
+      {% elif user_claim %}
+      <section class="claim-card">
+        <span class="eyebrow">Your claim</span><h2>{{ user_claim.get_status_display }}</h2>
+        <p class="muted">Your submitted answers are private. The finder and authorized staff can review the form.</p>
+        {% if user_claim.status == "SUBMITTED" %}
+        <div class="button-row"><a class="button button-soft" href="{% url 'chat-room' user_claim.conversation.pk %}">Open private chat</a>
+          <form method="post" action="{% url 'close-claim' user_claim.pk %}">{% csrf_token %}<button class="button button-outline" type="submit">Close my claim</button></form></div>
+        {% elif user_claim.status == "RETURNED" %}
+        <div class="button-row"><form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary" type="submit">Confirm I received it</button></form><form method="post" action="{% url 'close-claim' user_claim.pk %}">{% csrf_token %}<button class="button button-outline" type="submit">Close claim</button></form></div>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      <section class="comments-section" id="comments">
+        <div class="section-heading"><div><span class="eyebrow">Community</span><h2>Comments</h2></div><span class="muted">{{ comments|length }}</span></div>
+      {% if user.is_authenticated and can_interact %}
+        <form method="post" action="{% url 'add-comment' post.pk %}" class="comment-composer">
+          {% csrf_token %}{{ comment_form.text }}<button class="button button-primary" type="submit">Comment</button>
+        </form>
+      {% elif not user.is_authenticated and can_interact %}
+        <div class="comment-composer guest-composer"><p>Sign in to join the conversation.</p><button class="button button-soft" type="button" data-login-next="{{ request.path }}?resume=comment#comments">Log in to comment</button></div>
+      {% else %}
+        <div class="chat-readonly">Comments are closed for this listing.</div>
+        {% endif %}
+        <div class="comment-list">
+          {% for comment in comments %}
+          <article class="comment">
+            <div class="avatar avatar-small">{{ comment.author.first_name|default:comment.author.username|slice:":1"|upper }}</div>
+            <div class="comment-body"><div class="comment-meta"><strong>{{ comment.author.first_name|default:comment.author.username }}</strong><time>{{ comment.created_at|date:"M j · g:i a" }}</time></div><p>{{ comment.text|linebreaksbr }}</p></div>
+            {% if can_moderate %}<form method="post" action="{% url 'moderate-comment' comment.pk %}">{% csrf_token %}<input type="hidden" name="action" value="HIDDEN"><button class="text-action" type="submit">Hide</button></form>{% endif %}
+          </article>
+          {% empty %}<p class="muted empty-inline">No comments yet.</p>{% endfor %}
+        </div>
+      </section>
+    </article>
+    <aside class="detail-aside">
+      <div class="panel action-panel">
+        <span class="eyebrow">Next step</span>
+        {% if post.post_type == "FOUND" and post.can_accept_claims and not user_claim and can_interact %}
+          {% if user.is_authenticated %}
+            {% if user.pk != post.author_id %}<a class="button button-primary button-full" href="#claim-form">Claim this item</a>{% else %}<p class="muted">This is your found-item post.</p>{% endif %}
+          {% else %}<button class="button button-primary button-full" data-login-next="{{ request.path }}?resume=claim#claim-form">Claim this item</button>{% endif %}
+        {% endif %}
+        {% if user.is_authenticated and user.pk != post.author_id and can_interact %}
+          <a class="button button-outline button-full" href="{% url 'post-detail' post.pk %}?resume=message">Message poster</a>
+        {% elif not user.is_authenticated and can_interact %}
+          <button class="button button-outline button-full" data-login-next="{{ request.path }}?resume=message">Sign in to message</button>
+        {% endif %}
+        <p class="action-note">Keep all coordination inside Find-IT. Meet only within school premises.</p>
+        {% if can_manage %}
+          <hr>
+          <span class="eyebrow">Manage listing</span>
+          <a class="button button-soft button-full" href="{% url 'edit-post' post.pk %}">Edit post</a>
+          {% if post.post_type == "FOUND" and post.status != "TURNED_OVER" and post.status != "CLAIMED" and post.status != "CLOSED" %}
+          <form method="post" action="{% url 'turnover' post.pk %}">{% csrf_token %}<button class="button button-outline button-full" type="submit">Turn over to guard house</button></form>
+          {% endif %}
+          {% if can_moderate and post.status == "TURNED_OVER" %}
+          <form method="post" action="{% url 'claimed' post.pk %}" class="stack-form compact-form">
+            {% csrf_token %}<label>Account that collected it<select name="recipient_id" required><option value="">Select student</option>{% for account in account_list %}<option value="{{ account.pk }}">{{ account.first_name|default:account.username }} · {{ account.profile.student_id|default:account.username }}</option>{% endfor %}</select></label>
+            <button class="button button-primary button-full" type="submit">Confirm witnessed pickup</button>
+          </form>
+          {% endif %}
+          {% if can_moderate and post.status == "RETURNED" %}
+          <form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary button-full" type="submit">Confirm witnessed pickup</button></form>
+          {% endif %}
+          {% if post.status != "CLOSED" and post.status != "CLAIMED" %}
+          <form method="post" action="{% url 'close-post' post.pk %}" class="stack-form compact-form">
+            {% csrf_token %}<label>Close reason (optional)<input name="reason" maxlength="240"></label><button class="button button-outline button-full" type="submit">Close listing</button>
+          </form>
+          {% endif %}
+          <form method="post" action="{% url 'remove-post' post.pk %}">{% csrf_token %}<button class="text-action" type="submit">Remove from active listings</button></form>
+        {% endif %}
+      </div>
+      {% if applications %}
+      <div class="panel application-panel">
+        <span class="eyebrow">Private review</span><h3>Claim applications</h3>
+        {% for application in applications %}
+        <div class="application-row">
+          <div><strong>{{ application.claimant.first_name|default:application.claimant.username }}</strong><small>{{ application.get_status_display }} · {{ application.submitted_at|date:"M j" }}</small></div>
+          <a class="text-action" href="{% url 'claim-review' application.pk %}">View form</a>
+          {% if post.author_id == user.pk and application.status == "SUBMITTED" %}
+          <form method="post" action="{% url 'returned' post.pk %}">{% csrf_token %}<input type="hidden" name="claim_id" value="{{ application.pk }}"><button class="button button-small button-soft" type="submit">Mark returned</button></form>
+          {% endif %}
+          {% if application.status == "SUBMITTED" and application.conversation %}
+          <a class="text-action" href="{% url 'chat-room' application.conversation.pk %}">Chat</a>
+          {% endif %}
+          {% if application.status == "SUBMITTED" or application.status == "RETURNED" %}
+          <form method="post" action="{% url 'close-claim' application.pk %}">{% csrf_token %}<button class="text-action" type="submit">Close claim</button></form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if can_manage and post.status_events.all %}
+      <details class="panel history-panel"><summary>Status history</summary>
+        {% for event in post.status_events.all %}<p><strong>{{ event.get_new_status_display }}</strong><small>{{ event.created_at|date:"M j, Y · g:i a" }}{% if event.actor %} · {{ event.actor.first_name|default:event.actor.username }}{% endif %}</small></p>{% endfor %}
+      </details>
+      {% endif %}
+    </aside>
+  </div>
+</section>
+{% endblock %}

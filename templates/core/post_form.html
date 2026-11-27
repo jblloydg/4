@@ -1,0 +1,24 @@
+{% extends "core/base.html" %}
+{% block title %}{% if editing %}Edit{% else %}Create{% endif %} post · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page form-page">
+  <a class="back-link" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">← Back</a>
+  <div class="page-heading compact-heading"><div><span class="eyebrow">Share with campus</span><h1>{% if editing %}Edit your post{% else %}Create a post{% endif %}</h1><p class="muted">Broad details help people recognize the item without revealing private identifiers.</p></div></div>
+  <form method="post" enctype="multipart/form-data" class="panel stack-form post-editor">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+    <label>Post type{{ form.post_type }}<small class="form-help">Choose Lost if you are looking for an item, or Found if you have an item.</small></label>
+    {% if form.post_type.errors %}<div class="field-error">{{ form.post_type.errors }}</div>{% endif %}
+    <label>Broad title{{ form.title }}</label>{% if form.title.errors %}<div class="field-error">{{ form.title.errors }}</div>{% endif %}
+    <label>Description{{ form.description }}<small class="form-help">Avoid exact serial numbers, hidden markings, or personal details.</small></label>{% if form.description.errors %}<div class="field-error">{{ form.description.errors }}</div>{% endif %}
+    <label>Approximate date{{ form.approximate_date }}</label>{% if form.approximate_date.errors %}<div class="field-error">{{ form.approximate_date.errors }}</div>{% endif %}
+    <label>Optional exterior photo{{ form.photo }}<small class="form-help">JPG, PNG, or WebP; up to 5 MB. Photograph the outside only.</small></label>{% if form.photo.errors %}<div class="field-error">{{ form.photo.errors }}</div>{% endif %}
+    <div id="verification-questions" class="question-editor">
+      <div><span class="eyebrow">Private ownership check</span><h2>Write five questions</h2><p class="muted">These questions are hidden from the public. Avoid clues already visible in the post or photo.</p></div>
+      {% for field in form %}{% if "question_" in field.name %}<label>{{ field.label }}{{ field }}</label>{% if field.errors %}<div class="field-error">{{ field.errors }}</div>{% endif %}{% endif %}{% endfor %}
+    </div>
+    <div class="form-callout"><strong>Meet-up reminder</strong><span>Arrange any hand-off only within school premises.</span></div>
+    <div class="form-actions"><a class="button button-outline" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">Cancel</a><button class="button button-primary" type="submit">{% if editing %}Save changes{% else %}Publish post{% endif %}</button></div>
+  </form>
+</section>
+{% endblock %}

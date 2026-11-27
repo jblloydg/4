@@ -1,0 +1,147 @@
+import json
+
+from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import timezone
+
+from .models import ChatMessage, ClaimApplication, Conversation, Profile
+
+
+def _staff_user(user):
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    try:
+        return user.profile.role in {Profile.Role.STAFF, Profile.Role.ADMIN}
+    except Profile.DoesNotExist:
+        return False
+
+
+class ConversationConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.conversation_id = self.scope["url_route"]["kwargs"]["conversation_id"]
+        self.group_name = f"conversation_{self.conversation_id.hex}"
+        user = self.scope["user"]
+        allowed = await self._can_view(user.pk if user.is_authenticated else None)
+        if not allowed:
+            await self.close(code=4403)
+            return
+        self.can_send = await self._can_send(user.pk)
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+        await self.send(text_data=json.dumps({
+            "type": "connection",
+            "can_send": self.can_send,
+            "notice": "Messages are private to participants and authorized staff.",
+        }))
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "group_name"):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if not self.can_send or not text_data:
+            await self.send(text_data=json.dumps({"type": "error", "message": "This conversation is read-only."}))
+            return
+        try:
+            payload = json.loads(text_data)
+        except json.JSONDecodeError:
+            await self.send(text_data=json.dumps({"type": "error", "message": "Invalid message."}))
+            return
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            return
+        if len(message) > 2000:
+            await self.send(text_data=json.dumps({"type": "error", "message": "Messages must be 2,000 characters or fewer."}))
+            return
+        stored = await self._save_message(self.scope["user"].pk, message)
+        if not stored:
+            await self.send(text_data=json.dumps({"type": "error", "message": "This conversation is no longer open."}))
+            return
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "chat.message",
+                "id": stored["id"],
+                "sender": stored["sender"],
+                "sender_id": stored["sender_id"],
+                "text": stored["text"],
+                "sent_at": stored["sent_at"],
+            },
+        )
+
+    async def chat_message(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "message",
+            "id": event["id"],
+            "sender": event["sender"],
+            "sender_id": event["sender_id"],
+            "text": event["text"],
+            "sent_at": event["sent_at"],
+        }))
+
+    @database_sync_to_async
+    def _can_view(self, user_id):
+        if user_id is None:
+            return False
+        if not self.scope["user"].is_active:
+            return False
+        conversation = Conversation.objects.select_related("initiator", "recipient").filter(pk=self.conversation_id).first()
+        if not conversation:
+            return False
+        user = self.scope["user"]
+        return conversation.includes(user) or _staff_user(user)
+
+    @database_sync_to_async
+    def _can_send(self, user_id):
+        conversation = Conversation.objects.filter(pk=self.conversation_id).first()
+        if not self.scope["user"].is_active or not conversation or user_id not in {conversation.initiator_id, conversation.recipient_id}:
+            return False
+        return not conversation.is_closed and not conversation.is_paused
+
+    @database_sync_to_async
+    def _save_message(self, user_id, text):
+        conversation = Conversation.objects.select_related("post", "claim").filter(pk=self.conversation_id).first()
+        if not self.scope["user"].is_active or not conversation or conversation.is_closed or conversation.is_paused:
+            return None
+        if user_id not in {conversation.initiator_id, conversation.recipient_id}:
+            return None
+        message = ChatMessage.objects.create(
+            conversation=conversation,
+            sender_id=user_id,
+            text=text,
+        )
+        conversation.updated_at = timezone.now()
+        conversation.save(update_fields=["updated_at"])
+        if conversation.claim_id:
+            ClaimApplication.objects.filter(pk=conversation.claim_id).update(last_activity_at=timezone.now())
+        return {
+            "id": message.pk,
+            "sender": message.sender.get_full_name() or message.sender.username,
+            "sender_id": user_id,
+            "text": message.text,
+            "sent_at": message.sent_at.isoformat(),
+        }
+
+
+class NotificationConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        user = self.scope["user"]
+        if not user.is_authenticated:
+            await self.close(code=4403)
+            return
+        self.group_name = f"notifications_{user.pk}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, "group_name"):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def notification_created(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "notification",
+            "id": event["id"],
+            "text": event["text"],
+        }))

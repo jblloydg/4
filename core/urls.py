@@ -1,0 +1,37 @@
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path("", views.landing, name="landing"),
+    path("login/", views.login_view, name="login"),
+    path("signup/", views.signup_view, name="signup"),
+    path("logout/", views.logout_view, name="logout"),
+    path("home/", views.home, name="home"),
+    path("p/<uuid:post_id>/", views.post_detail, name="post-detail"),
+    path("posts/new/", views.create_post, name="create-post"),
+    path("posts/<uuid:post_id>/edit/", views.edit_post, name="edit-post"),
+    path("posts/<uuid:post_id>/claim/", views.submit_claim, name="submit-claim"),
+    path("posts/<uuid:post_id>/comment/", views.add_comment, name="add-comment"),
+    path("posts/<uuid:post_id>/turn-over/", views.turnover_view, name="turnover"),
+    path("posts/<uuid:post_id>/returned/", views.returned_view, name="returned"),
+    path("posts/<uuid:post_id>/claimed/", views.claimed_view, name="claimed"),
+    path("posts/<uuid:post_id>/close/", views.close_post_view, name="close-post"),
+    path("posts/<uuid:post_id>/remove/", views.remove_post_view, name="remove-post"),
+    path("my-posts/", views.my_posts, name="my-posts"),
+    path("my-claims/", views.my_claims, name="my-claims"),
+    path("claims/<uuid:claim_id>/form/", views.claim_review, name="claim-review"),
+    path("claims/<uuid:claim_id>/close/", views.close_claim_view, name="close-claim"),
+    path("conversations/<uuid:conversation_id>/", views.chat_room, name="chat-room"),
+    path("conversations/<uuid:conversation_id>/pause/", views.pause_chat, name="pause-chat"),
+    path("conversations/<uuid:conversation_id>/unpause/", views.unpause_chat, name="unpause-chat"),
+    path("conversations/<uuid:conversation_id>/report/", views.report_chat, name="report-chat"),
+    path("notifications/", views.notifications, name="notifications"),
+    path("messages/", views.messages_inbox, name="messages"),
+    path("staff/", views.staff_dashboard, name="staff-dashboard"),
+    path("staff/accounts/", views.staff_accounts, name="staff-accounts"),
+    path("staff/settings/", views.admin_settings, name="admin-settings"),
+    path("staff/reports/", views.admin_reports, name="admin-reports"),
+    path("staff/reports/<uuid:report_id>/review/", views.review_report, name="review-report"),
+    path("staff/comments/<int:comment_id>/moderate/", views.staff_moderate_comment, name="moderate-comment"),
+]

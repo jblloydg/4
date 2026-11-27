@@ -1,0 +1,39 @@
+{% extends "core/base.html" %}
+{% block title %}Welcome to Find-IT{% endblock %}
+{% block content %}
+<section class="landing-grid page-wrap">
+  <div class="landing-story">
+    <span class="eyebrow">Campus lost and found</span>
+    <h1>Lost something?<br><span class="text-teal">Found something?</span></h1>
+    <p class="lead">Find-IT helps the Davao Oriental State University community reconnect items with the people who own them.</p>
+    <div class="story-points">
+      <div><span class="story-icon">⌕</span><p><strong>Search campus listings</strong><br><small>Browse broad item details without exposing private information.</small></p></div>
+      <div><span class="story-icon">✓</span><p><strong>Verify ownership privately</strong><br><small>Answer five finder questions that only the finder and authorized staff can review.</small></p></div>
+      <div><span class="story-icon">↗</span><p><strong>Arrange a safe return</strong><br><small>Coordinate through Find-IT and meet only within school premises.</small></p></div>
+    </div>
+    <div class="privacy-note"><span aria-hidden="true">◆</span><span><strong>Your details stay protected.</strong> Student IDs, verification answers, and private messages never appear in public search.</span></div>
+  </div>
+  <section class="auth-card">
+    <div class="auth-card-heading">
+      <span class="brand-mark brand-mark-small" aria-hidden="true">F</span>
+      <div><span class="eyebrow">Welcome back</span><h2>Log in to Find-IT</h2></div>
+    </div>
+    <p class="muted">Use your school ID or staff username.</p>
+    {% if login_form.non_field_errors %}<div class="form-errors">{{ login_form.non_field_errors }}</div>{% endif %}
+    <form method="post" action="{% url 'login' %}" class="stack-form">
+      {% csrf_token %}
+      <label>School ID or staff username<input name="username" autocomplete="username" placeholder="2024-0122" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required></label>
+      <button class="button button-primary button-full" type="submit">Log in</button>
+    </form>
+    <div class="auth-divider"><span>New to Find-IT?</span></div>
+    <a class="button button-soft button-full" href="{% url 'signup' %}">Create a student demo account</a>
+    <p class="form-help center">Student ID format: <strong>YYYY-NNNN</strong></p>
+    <p class="fine-print center">Direct post links can be viewed without signing in. Actions such as claiming, commenting, and messaging require an account.</p>
+  </section>
+</section>
+<section class="landing-bottom page-wrap">
+  <div><span class="eyebrow">A safer hand-off</span><h2>Keep the public post broad.<br>Keep proof private.</h2></div>
+  <p>Share a general description and, if helpful, a broad exterior photo. Keep precise identifying details for the private claim form.</p>
+</section>
+{% endblock %}

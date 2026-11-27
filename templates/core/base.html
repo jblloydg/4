@@ -1,0 +1,71 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17344f">
+  <title>{% block title %}Find-IT · Davao Oriental State University{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body data-user-authenticated="{{ user.is_authenticated|yesno:'true,false' }}" data-user-id="{% if user.is_authenticated %}{{ user.pk }}{% endif %}">
+  <header class="topbar">
+    <a class="brand" href="{% if user.is_authenticated %}{% url 'home' %}{% else %}{% url 'landing' %}{% endif %}">
+      <span class="brand-mark" aria-hidden="true">F</span>
+      <span><strong>Find-IT</strong><small>Davao Oriental State University</small></span>
+    </a>
+    {% if user.is_authenticated %}
+    <nav class="main-nav" aria-label="Main navigation">
+      <a href="{% url 'home' %}">Browse</a>
+      <a href="{% url 'create-post' %}">Create post</a>
+      <a href="{% url 'my-posts' %}">My posts</a>
+      <a href="{% url 'my-claims' %}">My claims</a>
+      <a href="{% url 'messages' %}">Messages</a>
+      <a href="{% url 'notifications' %}" class="nav-notice">Updates{% if unread_notification_count %}<span class="notice-count">{{ unread_notification_count }}</span>{% endif %}</a>
+      {% if current_role == "staff" or current_role == "admin" %}<a href="{% url 'staff-dashboard' %}">Staff</a>{% endif %}
+      {% if current_role == "admin" %}<a href="{% url 'admin-settings' %}">Admin</a>{% endif %}
+    </nav>
+    <div class="user-menu">
+      <span class="role-chip">{{ user.first_name|default:user.username }}</span>
+      <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link-button" type="submit">Log out</button></form>
+    </div>
+    {% else %}
+    <a class="button button-outline topbar-login" href="{% url 'login' %}">Log in</a>
+    {% endif %}
+  </header>
+  {% if messages %}
+  <div class="flash-stack" role="status" aria-live="polite">
+    {% for message in messages %}<div class="flash flash-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  <main id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <span>Find-IT · Campus lost and found</span>
+    <span>Meet-ups and item hand-offs must happen within school premises.</span>
+  </footer>
+
+  {% if not user.is_authenticated %}
+  <div class="modal-backdrop" id="login-modal" aria-hidden="true">
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+      <button type="button" class="modal-close" data-close-login aria-label="Close sign-in">×</button>
+      <span class="eyebrow">Continue securely</span>
+      <h2 id="login-modal-title">Sign in to continue</h2>
+      <p class="muted">You’ll return to the post and action you selected.</p>
+      <form method="post" action="{% url 'login' %}" class="stack-form">
+        {% csrf_token %}
+        <input type="hidden" name="next" id="login-next" value="{{ request.get_full_path }}">
+        <label>School ID or staff username<input name="username" autocomplete="username" placeholder="2024-0122" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button button-primary button-full" type="submit">Log in and return</button>
+      </form>
+      <p class="fine-print">New student? <a href="{% url 'signup' %}">Create a demo account</a></p>
+    </section>
+  </div>
+  {% endif %}
+  <script src="{% static 'js/app.js' %}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
