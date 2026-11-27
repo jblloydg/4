@@ -455,6 +455,9 @@ class AbuseReport(models.Model):
 class SystemSettings(models.Model):
     """A single configurable settings row. Blank timers mean disabled."""
     guardhouse_grace_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    posts_per_hour = models.PositiveSmallIntegerField(
+        default=10, help_text="Most new posts one account can create in an hour.",
+    )
     archive_purge_days = models.PositiveSmallIntegerField(null=True, blank=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -478,3 +481,88 @@ class StaffAuditLog(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+
+def _new_turn_in_code():
+    import secrets
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I, easy to type
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+class TurnInTicket(models.Model):
+    """The QR / short code a finder shows at the guard house.
+
+    FOUND posts get one automatically when posted. On LOST posts, the finder
+    gets one when they choose to bring the item to the guard house.
+    """
+    code = models.CharField(max_length=12, unique=True, default=_new_turn_in_code, editable=False)
+    post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="turn_in_tickets")
+    finder = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="turn_in_tickets")
+    claim = models.ForeignKey(ClaimApplication, on_delete=models.SET_NULL, null=True, blank=True)
+    requested_at = models.DateTimeField(null=True, blank=True, help_text="When the finder said they are bringing it.")
+    received_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["post", "finder"], name="one_ticket_per_post_finder")]
+
+    def __str__(self):
+        return f"Turn-in {self.code}"
+
+
+class GuardhouseIntake(models.Model):
+    """Staff confirmation that an item physically arrived at the guard house."""
+
+    class Method(models.TextChoices):
+        QR = "QR", "QR scan"
+        CODE = "CODE", "Code typed in"
+        MANUAL = "MANUAL", "Manual (from the post page)"
+        WALK_IN = "WALK_IN", "Walk-in item (posted by staff)"
+
+    post = models.OneToOneField(ItemPost, on_delete=models.CASCADE, related_name="intake")
+    ticket = models.ForeignKey(TurnInTicket, on_delete=models.SET_NULL, null=True, blank=True)
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="guardhouse_intakes")
+    received_at = models.DateTimeField(default=timezone.now)
+    handed_over_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="handed_over_items"
+    )
+    handed_over_by_name = models.CharField(max_length=120, blank=True, help_text="For people without an account.")
+    method = models.CharField(max_length=8, choices=Method.choices)
+
+    @property
+    def handed_over_by_label(self):
+        if self.handed_over_by_user_id:
+            user = self.handed_over_by_user
+            return user.get_full_name() or user.username
+        return self.handed_over_by_name or "Not recorded"
+
+
+class StatusChangeRequest(models.Model):
+    """While an item is at the guard house the finder cannot change its status
+    directly; they ask staff instead. A reason is required, a photo optional."""
+
+    class Requested(models.TextChoices):
+        CLOSED = "CLOSED", "Close the listing"
+        OPEN = "OPEN", "Take the item back from the guard house"
+
+    class Decision(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+
+    post = models.ForeignKey(ItemPost, on_delete=models.CASCADE, related_name="status_requests")
+    requester = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="status_requests")
+    requested_status = models.CharField(max_length=8, choices=Requested.choices)
+    reason = models.TextField(max_length=1000)
+    photo = models.ImageField(upload_to="status-requests/%Y/%m/", validators=[validate_photo], blank=True, null=True)
+    decision = models.CharField(max_length=8, choices=Decision.choices, default=Decision.PENDING)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="reviewed_status_requests"
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["decision", "-created_at"]

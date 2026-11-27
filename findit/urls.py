@@ -9,6 +9,7 @@ admin.site.index_title = "Manage campus lost and found"
 
 urlpatterns = [
     path("django-admin/", admin.site.urls),
+    path("captcha/", include("captcha.urls")),
     path("", include("core.urls")),
 ]
 

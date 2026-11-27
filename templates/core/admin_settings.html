@@ -7,8 +7,9 @@
     <span class="eyebrow">Administrator only</span><h1>System timers</h1>
     <p class="muted">Leave a timer blank to keep it disabled. These settings are stored in the database, not hard-coded in the website.</p>
     <form method="post" class="stack-form">{% csrf_token %}
-      <label>Guard-house grace period (days){{ form.guardhouse_grace_days }}<small class="form-help">After an item is turned over, the listing auto-closes after this many days. Blank means it stays open until manually closed.</small></label>{% if form.guardhouse_grace_days.errors %}<div class="field-error">{{ form.guardhouse_grace_days.errors }}</div>{% endif %}
+      <label>Guard-house grace period (days){{ form.guardhouse_grace_days }}<small class="form-help">After staff receive an item, its claims and chats stay open for this many days; then the listing closes and its chats become read-only. Blank means they stay open until the item is claimed or closed.</small></label>{% if form.guardhouse_grace_days.errors %}<div class="field-error">{{ form.guardhouse_grace_days.errors }}</div>{% endif %}
       <label>Archived post auto-delete (days){{ form.archive_purge_days }}<small class="form-help">After a post is archived, permanently remove its post, claims, photo, and chat together after this many days. Blank means keep history until an authorized person removes it.</small></label>{% if form.archive_purge_days.errors %}<div class="field-error">{{ form.archive_purge_days.errors }}</div>{% endif %}
+      <label>New posts per account per hour{{ form.posts_per_hour }}<small class="form-help">Limits spam. Default 10.</small></label>{% if form.posts_per_hour.errors %}<div class="field-error">{{ form.posts_per_hour.errors }}</div>{% endif %}
       <div class="form-callout warning-callout"><strong>Reports are protected</strong><span>A post connected to a pending safety report is not permanently deleted until the report is resolved.</span></div>
       <button class="button button-primary" type="submit">Save timer settings</button>
     </form>

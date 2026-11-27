@@ -5,11 +5,13 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
 from django.core.exceptions import ValidationError
 
+from captcha.fields import CaptchaField
 from django.db import models
 from django.db.models import Q
 
 from .models import (
-    AbuseReport, AnswerType, Category, ItemPost, PostPhoto, Profile, QuestionTemplate, SystemSettings,
+    AbuseReport, AnswerType, Category, ItemPost, PostPhoto, Profile, QuestionTemplate, StatusChangeRequest,
+    SystemSettings,
 )
 from .validators import validate_photo
 
@@ -144,9 +146,9 @@ class ItemPostForm(forms.ModelForm):
         queryset=PostPhoto.objects.none(), required=False,
         widget=forms.CheckboxSelectMultiple, label="Remove photos",
     )
-    human_check = forms.CharField(
-        required=False, max_length=8, label="Quick check",
-        widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "off"}),
+    captcha = CaptchaField(
+        label="Captcha",
+        help_text="Needed only when a post has more than 10 photos. Type the letters, or solve the sum, shown in the image.",
     )
     questions = forms.ModelMultipleChoiceField(
         queryset=QuestionTemplate.objects.none(),
@@ -171,9 +173,11 @@ class ItemPostForm(forms.ModelForm):
         }
         labels = {"title": "Title (optional)", "description": "Description (optional)"}
 
-    def __init__(self, *args, human_check_answer=None, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.human_check_answer = human_check_answer
+        if self.is_bound and not self._captcha_needed():
+            # Only uploads that bring a post above 10 photos are checked.
+            del self.fields["captcha"]
         categories = Category.objects.filter(is_active=True)
         if self.instance.pk and self.instance.category_id:
             categories = Category.objects.filter(Q(is_active=True) | Q(pk=self.instance.category_id))
@@ -188,6 +192,11 @@ class ItemPostForm(forms.ModelForm):
                 q.template_id for q in self.instance.verification_questions.all() if q.template_id
             ]
 
+    def _captcha_needed(self):
+        new = len([f for f in self.files.getlist("photos") if f]) if self.files else 0
+        removing = len(self.data.getlist("remove_photos")) if hasattr(self.data, "getlist") else 0
+        return new > 0 and self.existing_photo_count() - removing + new > HUMAN_CHECK_PHOTO_THRESHOLD
+
     def existing_photo_count(self):
         return self.instance.photos.count() if self.instance.pk else 0
 
@@ -200,13 +209,6 @@ class ItemPostForm(forms.ModelForm):
             self.add_error("photos", "Add at least one photo of the item.")
         elif total > MAX_POST_PHOTOS:
             self.add_error("photos", f"A post can have at most {MAX_POST_PHOTOS} photos. You selected {total}.")
-        elif new_photos and total > HUMAN_CHECK_PHOTO_THRESHOLD:
-            answer = (cleaned.get("human_check") or "").strip()
-            if not self.human_check_answer or answer != str(self.human_check_answer):
-                self.add_error(
-                    "human_check",
-                    f"Uploading more than {HUMAN_CHECK_PHOTO_THRESHOLD} photos needs the quick check. Enter the answer shown.",
-                )
         picked = cleaned.get("questions") or []
         if len(picked) > MAX_POST_QUESTIONS:
             self.add_error("questions", f"Pick at most {MAX_POST_QUESTIONS} questions.")
@@ -253,7 +255,6 @@ class ClaimAnswerForm(forms.Form):
         self.fields["description"] = forms.CharField(
             label="Describe the item in your own words",
             max_length=1500,
-            min_length=10,
             help_text="Required. Mention details only the owner would know. Only the finder and staff can read this.",
             widget=forms.Textarea(attrs={"rows": 4, "placeholder": "For example: what it looks like, what was inside, how you lost it"}),
         )
@@ -336,8 +337,9 @@ class ReportForm(forms.ModelForm):
 class SystemSettingsForm(forms.ModelForm):
     class Meta:
         model = SystemSettings
-        fields = ["guardhouse_grace_days", "archive_purge_days"]
+        fields = ["guardhouse_grace_days", "archive_purge_days", "posts_per_hour"]
         widgets = {
+            "posts_per_hour": forms.NumberInput(attrs={"min": 1, "max": 500}),
             "guardhouse_grace_days": forms.NumberInput(attrs={"min": 1, "placeholder": "Disabled"}),
             "archive_purge_days": forms.NumberInput(attrs={"min": 1, "placeholder": "Disabled"}),
         }
@@ -347,6 +349,12 @@ class SystemSettingsForm(forms.ModelForm):
 
     def clean_archive_purge_days(self):
         return self._clean_timer("archive_purge_days")
+
+    def clean_posts_per_hour(self):
+        value = self.cleaned_data.get("posts_per_hour")
+        if not value or value < 1 or value > 500:
+            raise ValidationError("Choose between 1 and 500 posts per hour.")
+        return value
 
     def _clean_timer(self, field):
         value = self.cleaned_data.get(field)
@@ -391,3 +399,14 @@ class CategoryForm(forms.ModelForm):
             if Category.objects.filter(is_active=True).exclude(pk=self.instance.pk).count() == 0:
                 raise ValidationError("Keep at least one category active.")
         return active
+
+
+class CaptchaOnlyForm(forms.Form):
+    """Renders a fresh captcha on the post form; ItemPostForm validates it when needed."""
+    captcha = CaptchaField(label="Captcha")
+
+
+class StatusChangeRequestForm(forms.Form):
+    requested_status = forms.ChoiceField(label="What should staff do?", choices=StatusChangeRequest.Requested.choices)
+    reason = forms.CharField(label="Reason (required)", max_length=1000, widget=forms.Textarea(attrs={"rows": 3}))
+    photo = forms.ImageField(label="Photo (optional)", required=False, validators=[validate_photo])

@@ -3,10 +3,12 @@
 {% block content %}
 <section class="narrow-page form-page">
   <a class="back-link" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">← Back</a>
-  <div class="page-heading compact-heading"><div><span class="eyebrow">Share with campus</span><h1>{% if editing %}Edit your post{% else %}Create a post{% endif %}</h1><p class="muted">Broad details help people recognize the item without revealing private identifiers.</p></div></div>
+  <div class="page-heading compact-heading"><div><span class="eyebrow">Share with campus</span><h1>{% if walk_in %}Record a walk-in item{% elif editing %}Edit your post{% else %}Create a post{% endif %}</h1><p class="muted">Broad details help people recognize the item without revealing private identifiers.</p></div></div>
   <form method="post" enctype="multipart/form-data" class="panel stack-form post-editor">
     {% csrf_token %}
     {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+    {% if walk_in %}<div class="form-callout guardhouse-callout"><strong>Walk-in at the guard house</strong><span>This creates a FOUND post that is already marked as at the guard house.</span></div>
+    <label>Handed over by (name)<input name="handed_over_by_name" maxlength="120" value="{{ handed_over_by_name }}" placeholder="Name of the person who brought it"></label>{% endif %}
     <label>Post type{{ form.post_type }}<small class="form-help">Choose Lost if you are looking for an item, or Found if you have an item.</small></label>
     {% if form.post_type.errors %}<div class="field-error">{{ form.post_type.errors }}</div>{% endif %}
     <label>Category{{ form.category }}<small class="form-help">Required. Helps people browse and filters the ownership questions.</small></label>
@@ -25,8 +27,8 @@
       <p class="photo-count muted" id="photo-count" aria-live="polite"></p>
       {% if form.photos.errors %}<div class="field-error">{{ form.photos.errors }}</div>{% endif %}
       <div class="human-check" id="human-check" data-threshold="10" data-existing="{% if editing %}{{ post.photos.count }}{% else %}0{% endif %}">
-        <label>{{ human_check_question }} <small class="form-help">Needed only when a post has more than 10 photos.</small>{{ form.human_check }}</label>
-        {% if form.human_check.errors %}<div class="field-error">{{ form.human_check.errors }}</div>{% endif %}
+        <label>Captcha <small class="form-help">Needed only when a post has more than 10 photos. Type the letters, or solve the sum, shown in the image.</small>{{ captcha_form.captcha }}</label>
+        {% if form.captcha.errors %}<div class="field-error">{{ form.captcha.errors }}</div>{% endif %}
       </div>
     </fieldset>
     <label>{{ form.title.label }}{{ form.title }}</label>{% if form.title.errors %}<div class="field-error">{{ form.title.errors }}</div>{% endif %}
@@ -58,7 +60,7 @@
       {% endif %}
     </div>
     <div class="form-callout"><strong>Meet-up reminder</strong><span>Arrange any hand-off only within school premises.</span></div>
-    <div class="form-actions"><a class="button button-outline" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">Cancel</a><button class="button button-primary" type="submit">{% if editing %}Save changes{% else %}Publish post{% endif %}</button></div>
+    <div class="form-actions"><a class="button button-outline" href="{% if post %}{% url 'post-detail' post.pk %}{% else %}{% url 'home' %}{% endif %}">Cancel</a><button class="button button-primary" type="submit">{% if walk_in %}Post and record at guard house{% elif editing %}Save changes{% else %}Publish post{% endif %}</button></div>
   </form>
 </section>
 {% endblock %}

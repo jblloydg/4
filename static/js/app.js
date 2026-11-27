@@ -176,7 +176,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var threshold = parseInt(humanCheck.getAttribute("data-threshold") || "10", 10);
       var needed = adding > 0 && total > threshold;
       humanCheck.hidden = !needed && !humanCheck.querySelector(".field-error");
-      var answer = humanCheck.querySelector("input");
+      var answer = humanCheck.querySelector("input[type='text']");
       if (answer) answer.required = needed;
     }
   }
@@ -261,6 +261,16 @@ document.addEventListener("DOMContentLoaded", function () {
     try { remembered = window.localStorage.getItem(stateKey); } catch (e) {}
     if (remembered === "1" || params0.get("chat") === "open") setOpen(true);
   }
+
+  // Turn-in QR: the SVG is already in the page, so it still shows without internet.
+  document.querySelectorAll("[data-qr-toggle]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var box = document.getElementById("qr-box");
+      if (!box) return;
+      box.hidden = !box.hidden;
+      btn.textContent = box.hidden ? "Show turn-in QR" : "Hide turn-in QR";
+    });
+  });
 
   var params = new URLSearchParams(window.location.search);
   if (params.get("resume") === "claim") {

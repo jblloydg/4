@@ -1,0 +1,39 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Scan turn-in QR · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page scan-page">
+  <a class="back-link" href="{% url 'staff-dashboard' %}">← Staff workspace</a>
+  <div class="panel">
+    <span class="eyebrow">Guard house</span><h1>Scan a turn-in QR</h1>
+    <p class="muted">Point the camera at the finder's QR code. You'll get a one-tap confirm screen. If there is no internet, scans are saved on this device and you confirm them when you're back online.</p>
+
+    <div class="scan-box">
+      <video id="scan-video" playsinline muted hidden></video>
+      <canvas id="scan-canvas" hidden></canvas>
+      <div class="scan-placeholder" id="scan-placeholder"><span aria-hidden="true">⌖</span><p>Camera is off</p></div>
+    </div>
+    <div class="button-row">
+      <button class="button button-primary" type="button" id="scan-start">Start camera</button>
+      <button class="button button-outline" type="button" id="scan-stop" hidden>Stop camera</button>
+    </div>
+    <p class="fine-print" id="scan-status" aria-live="polite">Camera scanning works on this computer (localhost) or on an HTTPS site, in Chrome or Edge, or any browser with the built-in reader.</p>
+
+    <form class="stack-form manual-code" id="manual-code-form" method="get">
+      <label>Or type the code shown under the QR<input id="manual-code" name="code" maxlength="12" autocomplete="off" autocapitalize="characters" placeholder="e.g. 7KQ2MXHD" required></label>
+      <button class="button button-soft" type="submit">Look up code</button>
+    </form>
+
+    <section class="offline-queue" id="offline-queue" hidden>
+      <div class="section-heading"><div><span class="eyebrow">Saved while offline</span><h2>Queued scans</h2></div><button class="text-action" type="button" id="queue-clear">Clear list</button></div>
+      <p class="muted" id="queue-note">These were scanned without internet. Nothing has been confirmed yet. Open each one to check and confirm it.</p>
+      <ol class="queue-list" id="queue-list"></ol>
+    </section>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.FINDIT_TURN_IN_URL = "{% url 'turn-in' 'CODE' %}";</script>
+<script src="{% static 'vendor/jsQR.js' %}" defer></script>
+<script src="{% static 'js/scan.js' %}" defer></script>
+{% endblock %}

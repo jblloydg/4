@@ -14,14 +14,14 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from .forms import (
-    AdminReviewForm, CategoryForm, ClaimAnswerForm, CloseReasonForm, CommentForm, QuestionTemplateForm,
+    AdminReviewForm, CaptchaOnlyForm, StatusChangeRequestForm, CategoryForm, ClaimAnswerForm, CloseReasonForm, CommentForm, QuestionTemplateForm,
     FindItLoginForm, ItemPostForm, ReportForm, SignupForm, StaffAccountForm,
     SystemSettingsForm,
 )
 from .models import (
     AbuseReport, Category, ClaimAnswer, ClaimApplication, Comment, Conversation,
-    ChatQuestion, InAppNotification, ItemPost, PostShare, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
-    SystemSettings, VerificationQuestion,
+    ChatQuestion, GuardhouseIntake, InAppNotification, ItemPost, PostShare, PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog,
+    StatusChangeRequest, SystemSettings, TurnInTicket, VerificationQuestion,
 )
 from .permissions import is_admin, is_staff_or_admin, role_of
 from .services import (
@@ -29,7 +29,8 @@ from .services import (
     answer_chat_question, apply_post_questions, approve_claim, ask_chat_questions, can_decide_claim,
     chat_questions_ready, chat_roles, claim_counts, create_claim_conversation, create_lost_post_conversation,
     current_round_questions, decline_claim, notify_user, reapply_status, record_status, reopen_lost_report,
-    return_to_claimant, turn_over_to_guardhouse,
+    request_guardhouse, request_status_change, return_to_claimant, review_status_change, ticket_for,
+    turn_over_to_guardhouse,
 )
 
 User = get_user_model()
@@ -181,6 +182,9 @@ def post_detail(request, post_id):
     for application in applications:
         application.can_decide = can_decide_claim(request.user, application)
         application.rank = application.approval_rank
+    my_ticket = None
+    if request.user.is_authenticated:
+        my_ticket = post.turn_in_tickets.filter(finder=request.user).first()
     panel_conversation = None
     if request.user.is_authenticated and request.user.pk != post.author_id:
         if post.post_type == ItemPost.Type.FOUND and latest_claim is not None:
@@ -208,6 +212,13 @@ def post_detail(request, post_id):
         "shared_by_author": post.shares.filter(user_id=post.author_id).exists(),
         "share_count": post.shares.count(),
         "panel_conversation": panel_conversation,
+        "my_ticket": my_ticket,
+        "my_ticket_qr": _qr_svg(request, my_ticket) if my_ticket else "",
+        "intake": getattr(post, "intake", None) if post.status == ItemPost.Status.TURNED_OVER else None,
+        "is_ticket_finder": bool(my_ticket),
+        "status_request_form": StatusChangeRequestForm() if my_ticket and post.status == ItemPost.Status.TURNED_OVER else None,
+        "my_pending_request": post.status_requests.filter(requester=request.user, decision="PENDING").first() if request.user.is_authenticated else None,
+        "pending_status_requests": post.status_requests.filter(decision="PENDING").select_related("requester") if can_moderate else [],
         "panel_messages": list(panel_conversation.messages.select_related("sender").order_by("-sent_at")[:50])[::-1] if panel_conversation else [],
         "panel_can_send": bool(
             panel_conversation and panel_conversation.includes(request.user)
@@ -215,21 +226,6 @@ def post_detail(request, post_id):
         ),
     }
     return render(request, "core/post_detail.html", context)
-
-
-POSTS_PER_HOUR_LIMIT = 10
-
-
-def _human_check(request, refresh=False):
-    """A simple offline 'are you human' question used for uploads above 10 photos.
-    The expected answer is kept in the session, never in the page."""
-    import secrets
-    challenge = request.session.get("post_human_check")
-    if refresh or not challenge:
-        a, b = secrets.randbelow(8) + 2, secrets.randbelow(8) + 2
-        challenge = {"question": f"What is {a} + {b}?", "answer": a + b}
-        request.session["post_human_check"] = challenge
-    return challenge
 
 
 def _question_options(form):
@@ -246,18 +242,21 @@ def _question_options(form):
     return options
 
 
+def _posts_per_hour():
+    return SystemSettings.current().posts_per_hour or 10
+
+
 def _posting_rate_limited(user):
     since = timezone.now() - timedelta(hours=1)
-    return ItemPost.objects.filter(author=user, created_at__gte=since).count() >= POSTS_PER_HOUR_LIMIT
+    return ItemPost.objects.filter(author=user, created_at__gte=since).count() >= _posts_per_hour()
 
 
 @login_required
 def create_post(request):
-    challenge = _human_check(request)
-    form = ItemPostForm(request.POST or None, request.FILES or None, human_check_answer=challenge["answer"])
+    form = ItemPostForm(request.POST or None, request.FILES or None)
     if request.method == "POST":
         if _posting_rate_limited(request.user):
-            messages.error(request, f"You can create up to {POSTS_PER_HOUR_LIMIT} posts per hour. Please try again later.")
+            messages.error(request, f"You can create up to {_posts_per_hour()} posts per hour. Please try again later.")
             return redirect("my-posts")
         if form.is_valid():
             with transaction.atomic():
@@ -273,13 +272,10 @@ def create_post(request):
                     actor=request.user,
                     note="Listing created.",
                 )
-            _human_check(request, refresh=True)
             messages.success(request, "Your post is live.")
             return redirect("post-detail", post_id=post.pk)
-        challenge = _human_check(request, refresh=True)
-        form.human_check_answer = challenge["answer"]
     return render(request, "core/post_form.html", {
-        "form": form, "human_check_question": challenge["question"], "question_options": _question_options(form),
+        "form": form, "captcha_form": CaptchaOnlyForm(), "question_options": _question_options(form),
     })
 
 
@@ -288,8 +284,7 @@ def edit_post(request, post_id):
     post = get_object_or_404(ItemPost, pk=post_id)
     if post.author_id != request.user.pk and not is_admin(request.user):
         return HttpResponseForbidden("Only the post author or an administrator may edit this post.")
-    challenge = _human_check(request)
-    form = ItemPostForm(request.POST or None, request.FILES or None, instance=post, human_check_answer=challenge["answer"])
+    form = ItemPostForm(request.POST or None, request.FILES or None, instance=post)
     if post.claims.exists():
         form.fields["post_type"].disabled = True
         form.fields["questions"].disabled = True
@@ -302,11 +297,8 @@ def edit_post(request, post_id):
                 apply_post_questions(updated, form.picked_questions())
         messages.success(request, "Your post was updated.")
         return redirect("post-detail", post_id=post.pk)
-    if request.method == "POST" and not form.is_valid():
-        challenge = _human_check(request, refresh=True)
-        form.human_check_answer = challenge["answer"]
     return render(request, "core/post_form.html", {
-        "form": form, "editing": True, "post": post, "human_check_question": challenge["question"],
+        "form": form, "editing": True, "post": post, "captcha_form": CaptchaOnlyForm(),
         "question_options": _question_options(form), "questions_locked": post.claims.exists(),
         "locked_questions": post.verification_questions.all(),
     })
@@ -337,7 +329,7 @@ def submit_claim(request, post_id):
     form = ClaimAnswerForm(request.POST, questions=questions)
     if not form.is_valid():
         request.session["claim_form_data"] = {"post": str(post.pk), "data": request.POST.dict()}
-        messages.error(request, "Please answer every question and write a short description (at least 10 characters).")
+        messages.error(request, "Please answer every question and write a description of the item.")
         return redirect(f"{reverse('post-detail', args=[post.pk])}?resume=claim#claim-form")
     request.session.pop("claim_form_data", None)
 
@@ -440,15 +432,173 @@ def close_claim_view(request, claim_id):
 @login_required
 @require_POST
 def turnover_view(request, post_id):
+    """Finder: "I'm bringing it to the guard house" (status unchanged until staff
+    receive it). Staff: confirm it was received, from the post page."""
     post = get_object_or_404(ItemPost, pk=post_id)
-    if request.user.pk != post.author_id and not is_staff_or_admin(request.user):
-        return HttpResponseForbidden("Only the finder or authorized staff can record guard-house turnover.")
-    if post.post_type != ItemPost.Type.FOUND or post.status in {ItemPost.Status.CLAIMED, ItemPost.Status.CLOSED}:
-        messages.error(request, "This item cannot be turned over in its current state.")
+    if is_staff_or_admin(request.user):
+        handed_user = None
+        if request.POST.get("handed_over_by") == "finder":
+            ticket = post.turn_in_tickets.filter(requested_at__isnull=False).first() or post.turn_in_tickets.first()
+            handed_user = ticket.finder if ticket else post.author
+        try:
+            turn_over_to_guardhouse(
+                post, request.user, handed_over_by_user=handed_user,
+                handed_over_by_name=request.POST.get("handed_over_by_name", "").strip(),
+                method=GuardhouseIntake.Method.MANUAL,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, "Received at the guard house. Claims stay open; approved claimants pick it up in person.")
         return redirect("post-detail", post_id=post.pk)
-    turn_over_to_guardhouse(post, request.user)
-    messages.success(request, "The item is now listed as at the guard house. Existing claims were notified and closed.")
+    ticket = post.turn_in_tickets.filter(finder=request.user).first()
+    if ticket is None:
+        return HttpResponseForbidden("Only the finder can bring this item to the guard house.")
+    try:
+        request_guardhouse(ticket, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Staff were told you're on your way. Show turn-in code {ticket.code} (or its QR) at the guard house.")
     return redirect("post-detail", post_id=post.pk)
+
+
+@login_required
+@require_POST
+def lost_guardhouse_view(request, conversation_id):
+    """A finder on a LOST post chooses to bring the item to the guard house."""
+    conversation = get_object_or_404(Conversation.objects.select_related("post", "claim"), pk=conversation_id)
+    post = conversation.post
+    finder, _owner = chat_roles(conversation)
+    if post.post_type != ItemPost.Type.LOST or finder is None or finder.pk != request.user.pk:
+        return HttpResponseForbidden("Only the finder in this chat can do this.")
+    ticket = ticket_for(post, request.user, conversation.claim)
+    try:
+        request_guardhouse(ticket, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Staff were told you're on your way. Show turn-in code {ticket.code} (or its QR) at the guard house.")
+        notify_user(post.author, post, "A finder is bringing your item to the guard house.", conversation.claim, priority=True)
+    return redirect("chat-room", conversation_id=conversation.pk)
+
+
+def _qr_svg(request, ticket):
+    import segno
+    url = request.build_absolute_uri(reverse("turn-in", args=[ticket.code]))
+    return segno.make(url, error="m").svg_inline(scale=4, dark="#17344f", light="#ffffff")
+
+
+@login_required
+def ticket_qr(request, code):
+    ticket = get_object_or_404(TurnInTicket, code=code.upper())
+    if request.user.pk != ticket.finder_id and not is_staff_or_admin(request.user):
+        return HttpResponseForbidden("This QR code is private to the finder and staff.")
+    from django.http import HttpResponse
+    import segno
+    import io
+    buffer = io.BytesIO()
+    segno.make(request.build_absolute_uri(reverse("turn-in", args=[ticket.code])), error="m").save(
+        buffer, kind="svg", scale=8, dark="#17344f", border=4,
+    )
+    response = HttpResponse(buffer.getvalue(), content_type="image/svg+xml")
+    response["Content-Disposition"] = f'attachment; filename="find-it-turn-in-{ticket.code}.svg"'
+    return response
+
+
+@login_required
+def staff_scan(request):
+    if not is_staff_or_admin(request.user):
+        return HttpResponseForbidden("Staff access is required.")
+    return render(request, "core/staff_scan.html")
+
+
+@login_required
+def turn_in_view(request, code):
+    """Where a scanned QR (or a typed code) lands: one-tap 'Confirm turned in'."""
+    if not is_staff_or_admin(request.user):
+        return HttpResponseForbidden("Only guard-house staff can confirm a turn-in.")
+    ticket = TurnInTicket.objects.select_related("post", "post__category", "finder").filter(code=code.strip().upper()).first()
+    if ticket is None:
+        return render(request, "core/turn_in_confirm.html", {"code": code.strip().upper(), "ticket": None}, status=404)
+    post = ticket.post
+    if request.method == "POST":
+        method = GuardhouseIntake.Method.QR if request.POST.get("via") == "qr" else GuardhouseIntake.Method.CODE
+        handed_user = ticket.finder if request.POST.get("handed_over_by") != "other" else None
+        try:
+            turn_over_to_guardhouse(
+                post, request.user, ticket=ticket, handed_over_by_user=handed_user,
+                handed_over_by_name=request.POST.get("handed_over_by_name", "").strip(), method=method,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, f"Turn-in {ticket.code} confirmed. The item is now listed as at the guard house.")
+        return redirect("turn-in", code=ticket.code)
+    return render(request, "core/turn_in_confirm.html", {
+        "code": ticket.code, "ticket": ticket, "post": post,
+        "intake": getattr(post, "intake", None), "via": request.GET.get("via", "code"),
+    })
+
+
+@login_required
+def walk_in_view(request):
+    """Staff post an item someone handed in directly at the guard house."""
+    if not is_staff_or_admin(request.user):
+        return HttpResponseForbidden("Staff access is required.")
+    data = request.POST.copy() if request.method == "POST" else None
+    if data is not None:
+        data["post_type"] = ItemPost.Type.FOUND
+    form = ItemPostForm(data, request.FILES or None, initial={"post_type": ItemPost.Type.FOUND})
+    form.fields["post_type"].disabled = True
+    form.fields["post_type"].initial = ItemPost.Type.FOUND
+    handed_name = (request.POST.get("handed_over_by_name") or "").strip() if request.method == "POST" else ""
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            post = form.save(commit=False)
+            post.author = request.user
+            post.post_type = ItemPost.Type.FOUND
+            post.save()
+            form.save_photos(post)
+            apply_post_questions(post, form.picked_questions())
+            PostStatusEvent.objects.create(post=post, previous_status="", new_status=post.status, actor=request.user, note="Walk-in item posted by staff.")
+            turn_over_to_guardhouse(post, request.user, handed_over_by_name=handed_name or "Walk-in (name not given)", method=GuardhouseIntake.Method.WALK_IN)
+        messages.success(request, "Walk-in item posted and recorded as at the guard house.")
+        return redirect("post-detail", post_id=post.pk)
+    return render(request, "core/post_form.html", {
+        "form": form, "walk_in": True, "handed_over_by_name": handed_name,
+        "captcha_form": CaptchaOnlyForm(), "question_options": _question_options(form),
+    })
+
+
+@login_required
+@require_POST
+def status_request_view(request, post_id):
+    post = get_object_or_404(ItemPost, pk=post_id)
+    form = StatusChangeRequestForm(request.POST, request.FILES)
+    if not form.is_valid():
+        messages.error(request, "Choose a request and write a reason. " + " ".join(e for errs in form.errors.values() for e in errs))
+        return redirect("post-detail", post_id=post.pk)
+    try:
+        request_status_change(post, request.user, form.cleaned_data["requested_status"], form.cleaned_data["reason"], form.cleaned_data.get("photo"))
+    except PermissionError as exc:
+        return HttpResponseForbidden(str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, "Request sent to guard-house staff.")
+    return redirect("post-detail", post_id=post.pk)
+
+
+@login_required
+@require_POST
+def review_status_request_view(request, request_id):
+    if not is_staff_or_admin(request.user):
+        return HttpResponseForbidden("Staff access is required.")
+    row = get_object_or_404(StatusChangeRequest, pk=request_id)
+    review_status_change(row, request.user, request.POST.get("decision") == "approve", request.POST.get("note", ""))
+    messages.success(request, "Status request reviewed.")
+    return redirect(_safe_next(request, "staff-dashboard"))
 
 
 @login_required
@@ -504,6 +654,9 @@ def close_post_view(request, post_id):
     post = get_object_or_404(ItemPost, pk=post_id)
     if request.user.pk != post.author_id and not is_staff_or_admin(request.user):
         return HttpResponseForbidden("Only the author or staff can close this listing.")
+    if post.status == ItemPost.Status.TURNED_OVER and not is_staff_or_admin(request.user):
+        messages.error(request, "The item is at the guard house. Send a status request to staff instead.")
+        return redirect("post-detail", post_id=post.pk)
     form = CloseReasonForm(request.POST)
     reason = form.cleaned_data.get("reason", "") if form.is_valid() else ""
     close_post(post, request.user, reason)
@@ -517,6 +670,9 @@ def remove_post_view(request, post_id):
     post = get_object_or_404(ItemPost, pk=post_id)
     if request.user.pk != post.author_id and not is_staff_or_admin(request.user):
         return HttpResponseForbidden("Only the author or staff can remove this listing.")
+    if post.status == ItemPost.Status.TURNED_OVER and not is_staff_or_admin(request.user):
+        messages.error(request, "The item is at the guard house. Send a status request to staff instead.")
+        return redirect("post-detail", post_id=post.pk)
     archive_post(post, request.user)
     messages.success(request, "The post was removed from active listings. Its claims and chats remain in history.")
     return redirect("my-posts" if request.user.pk == post.author_id else "staff-dashboard")
@@ -550,7 +706,12 @@ def chat_room(request, conversation_id):
         if round_count < 5:
             question_bank = list(QuestionTemplate.objects.filter(is_active=True).prefetch_related("categories"))
     can_decide = bool(claim and can_decide_claim(request.user, claim))
+    lost_ticket = None
+    if is_asker and conversation.post.post_type == ItemPost.Type.LOST:
+        lost_ticket = conversation.post.turn_in_tickets.filter(finder=request.user).first()
     return render(request, "core/chat_room.html", {
+        "lost_ticket": lost_ticket,
+        "lost_ticket_qr": _qr_svg(request, lost_ticket) if lost_ticket else "",
         "conversation": conversation,
         "chat_messages": messages_qs,
         "staff_view": staff_view,
@@ -661,6 +822,10 @@ def staff_dashboard(request):
         "conversations": conversations,
         "recent_reports": AbuseReport.objects.filter(status=AbuseReport.Status.PENDING)[:20],
         "is_admin": is_admin(request.user),
+        "incoming": TurnInTicket.objects.filter(requested_at__isnull=False, received_at__isnull=True)
+            .exclude(post__status__in=["TURNED_OVER", "CLAIMED", "CLOSED"]).select_related("post", "finder")[:50],
+        "at_guardhouse": ItemPost.objects.filter(status=ItemPost.Status.TURNED_OVER).select_related("intake", "category")[:100],
+        "status_requests": StatusChangeRequest.objects.filter(decision="PENDING").select_related("post", "requester")[:50],
     })
 
 

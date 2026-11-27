@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "channels",
+    "captcha",
     "core.apps.CoreConfig",
 ]
 
@@ -111,6 +112,17 @@ LOGOUT_REDIRECT_URL = "landing"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Captcha (django-simple-captcha) for posts with more than 10 photos.
+CAPTCHA_CHALLENGE_FUNCT = "core.captcha_challenges.random_challenge"
+CAPTCHA_LENGTH = 5
+CAPTCHA_TIMEOUT = 10  # minutes
+CAPTCHA_IMAGE_SIZE = (150, 50)
+CAPTCHA_FONT_SIZE = 30
+
+# Backups (see core/backups.py and HANDOFF.md).
+BACKUP_DIR = Path(os.getenv("FINDIT_BACKUP_DIR", str(BASE_DIR / "backups")))
+BACKUP_KEEP_DAYS = int(os.getenv("FINDIT_BACKUP_KEEP_DAYS", "14"))
 
 if not DEBUG:
     if SECRET_KEY == "local-only-findit-change-before-deployment":

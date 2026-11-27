@@ -10,9 +10,9 @@
       <div><span class="eyebrow">Private Find-IT chat</span><h1>{{ conversation.post.display_title }}</h1><p class="muted">{% if staff_view %}Staff review view · Participants: {{ conversation.initiator.first_name|default:conversation.initiator.username }} and {{ conversation.recipient.first_name|default:conversation.recipient.username }}{% else %}{{ conversation.initiator.first_name|default:conversation.initiator.username }} ↔ {{ conversation.recipient.first_name|default:conversation.recipient.username }}{% endif %}</p></div>
       {% if conversation.is_paused %}<span class="status-pill status-closed">Paused for review</span>{% elif conversation.is_closed %}<span class="status-pill status-closed">Read-only</span>{% endif %}
     </header>
-    {% if claim %}
+    {% if claim or is_asker and conversation.post.post_type == "LOST" %}
     <div class="claim-strip">
-      <span class="status-pill status-{{ claim.status|lower }}">{% if claim.is_lost_report %}Owner verification · {% endif %}{{ claim.get_status_display }}{% if claim_rank %} · #{{ claim_rank }} approved{% endif %}</span>
+      {% if claim %}<span class="status-pill status-{{ claim.status|lower }}">{% if claim.is_lost_report %}Owner verification · {% endif %}{{ claim.get_status_display }}{% if claim_rank %} · #{{ claim_rank }} approved{% endif %}</span>{% else %}<span class="muted">Send ownership questions to verify the owner, or bring the item to the guard house.</span>{% endif %}
       {% if claim.status == "DECLINED" and claim.decline_reason %}<span class="muted">Reason: {{ claim.decline_reason }}</span>{% endif %}
       {% if can_decide and claim.status == "SUBMITTED" %}
         <form method="post" action="{% url 'approve-claim' claim.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="button button-primary button-small" type="submit"{% if not lost_ready %} disabled title="Send at least 3 questions and wait for all answers"{% endif %}>Approve</button></form>
@@ -28,10 +28,15 @@
       {% if claim.is_lost_report and claim.status == "RETURNED" and user.pk == claim.claimant_id %}
         <form method="post" action="{% url 'claimed' conversation.post.pk %}">{% csrf_token %}<button class="button button-primary button-small" type="submit">Confirm I received it</button></form>
       {% endif %}
+      {% if is_asker and conversation.post.post_type == "LOST" and conversation.post.status != "TURNED_OVER" and conversation.post.status != "CLAIMED" and conversation.post.status != "CLOSED" %}
+        {% if lost_ticket and lost_ticket.requested_at %}<button type="button" class="button button-soft button-small" data-qr-toggle{% if not lost_ticket_qr %} disabled{% endif %}>Show turn-in QR</button>
+        {% else %}<form method="post" action="{% url 'lost-guardhouse' conversation.pk %}">{% csrf_token %}<button class="button button-outline button-small" type="submit">Bring it to the guard house</button></form>{% endif %}
+      {% endif %}
       {% if can_reverify %}
         <form method="post" action="{% url 'reverify' conversation.pk %}">{% csrf_token %}<button class="button button-soft button-small" type="submit">Ask to be verified again (once)</button></form>
       {% endif %}
     </div>
+    {% if lost_ticket_qr %}<div class="qr-box chat-qr" id="qr-box" hidden>{{ lost_ticket_qr|safe }}<p class="qr-code-text">Code <strong>{{ lost_ticket.code }}</strong></p><p class="fine-print">Show this at the guard house. Private to you and staff.</p></div>{% endif %}
     {% if claim.is_lost_report and can_decide and claim.status == "SUBMITTED" and not lost_ready %}<p class="fine-print claim-strip-note">Approve unlocks after at least 3 questions are sent and all are answered. Read the answers yourself; nothing is checked automatically.</p>{% endif %}
     {% endif %}
     {% if conversation.is_paused %}<div class="form-callout warning-callout"><strong>Chat paused</strong><span>{{ conversation.pause_reason|default:"A staff member paused this chat for review." }}</span></div>{% endif %}

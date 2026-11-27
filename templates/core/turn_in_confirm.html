@@ -1,0 +1,42 @@
+{% extends "core/base.html" %}
+{% block title %}Turn-in {{ code }} · Find-IT{% endblock %}
+{% block content %}
+<section class="narrow-page">
+  <a class="back-link" href="{% url 'staff-scan' %}">← Scan another</a>
+  {% if not ticket %}
+  <div class="panel turn-in-panel not-found">
+    <span class="eyebrow">Turn-in code {{ code }}</span>
+    <h1>Not in the database</h1>
+    <p class="muted">No Find-IT post uses this code. Check the code with the person, or record the item as a walk-in.</p>
+    <div class="button-row"><a class="button button-primary" href="{% url 'walk-in' %}">Record a walk-in item</a><a class="button button-outline" href="{% url 'staff-scan' %}">Scan again</a></div>
+  </div>
+  {% else %}
+  <div class="panel turn-in-panel">
+    <span class="eyebrow">Turn-in code {{ ticket.code }}</span>
+    <div class="turn-in-item">
+      {% with cover=post.cover_photo %}{% if cover %}<img src="{{ cover.image.url }}" alt="">{% endif %}{% endwith %}
+      <div>
+        <div class="card-meta"><span class="type-pill type-{{ post.post_type|lower }}">{{ post.get_post_type_display }}</span>{% if post.category %}<span class="subtle-chip">{{ post.category.name }}</span>{% endif %}<span class="status-pill status-{{ post.status|lower }}">{{ post.get_status_display }}</span></div>
+        <h1>{{ post.display_title }}</h1>
+        <p class="muted">Finder: <strong>{{ ticket.finder.first_name|default:ticket.finder.username }}</strong>{% if ticket.requested_at %} · said they were bringing it {{ ticket.requested_at|date:"M j, g:i a" }}{% endif %}</p>
+        <a class="text-action" href="{% url 'post-detail' post.pk %}">Open the post</a>
+      </div>
+    </div>
+    {% if post.status == "TURNED_OVER" %}
+      <div class="form-callout"><strong>Already at the guard house</strong><span>Received {% if intake %}by {{ intake.received_by.first_name|default:intake.received_by.username }} on {{ intake.received_at|date:"M j, Y · g:i a" }} ({{ intake.get_method_display }}){% endif %}.</span></div>
+    {% elif post.status == "CLAIMED" or post.status == "CLOSED" %}
+      <div class="form-callout warning-callout"><strong>This listing is {{ post.get_status_display|lower }}</strong><span>It can't be turned in. Check with the person before accepting the item.</span></div>
+    {% else %}
+      <form method="post" class="stack-form">{% csrf_token %}
+        <input type="hidden" name="via" value="{{ via }}">
+        <fieldset class="radio-set"><legend>Handed over by</legend>
+          <label><input type="radio" name="handed_over_by" value="finder" checked> {{ ticket.finder.first_name|default:ticket.finder.username }} (the finder)</label>
+          <label><input type="radio" name="handed_over_by" value="other"> Someone else: <input name="handed_over_by_name" maxlength="120" placeholder="Name"></label>
+        </fieldset>
+        <button class="button button-primary button-full big-confirm" type="submit">Confirm turned in</button>
+      </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -2,10 +2,24 @@
 {% block title %}Staff workspace · Find-IT{% endblock %}
 {% block content %}
 <section class="page-wrap">
-  <div class="page-heading"><div><span class="eyebrow">Authorized staff</span><h1>Staff workspace</h1><p class="muted">Assist with private verification, record guard-house custody, and review safety reports.</p></div>
+  <div class="page-heading"><div><span class="eyebrow">Authorized staff</span><h1>Staff workspace</h1><p class="muted">Assist with private verification, record guard-house custody, and review safety reports.</p>
+    <div class="button-row gh-actions"><a class="button button-primary" href="{% url 'staff-scan' %}">⌖ Scan turn-in QR</a><a class="button button-soft" href="{% url 'walk-in' %}">＋ Walk-in item</a></div></div>
     {% if is_admin %}<div class="button-row"><a class="button button-soft" href="{% url 'staff-accounts' %}">Staff accounts</a><a class="button button-outline" href="{% url 'admin-categories' %}">Categories</a><a class="button button-outline" href="{% url 'admin-questions' %}">Question bank</a><a class="button button-outline" href="{% url 'admin-settings' %}">System timers</a><a class="button button-outline" href="{% url 'admin-reports' %}">Reports</a></div>{% endif %}
   </div>
   <div class="staff-stats"><div class="stat-card"><span>Active posts</span><strong>{{ posts|length }}</strong></div><div class="stat-card"><span>Pending reports</span><strong>{{ recent_reports|length }}</strong></div><div class="stat-card"><span>Chat access</span><strong>Authorized review</strong></div></div>
+  <div class="staff-columns">
+    <section class="panel"><div class="section-heading"><div><span class="eyebrow">Guard house</span><h2>On the way ({{ incoming|length }})</h2></div></div>
+      {% for t in incoming %}<article class="staff-row"><div><h3><a href="{% url 'post-detail' t.post.pk %}">{{ t.post.display_title }}</a></h3><small>Code {{ t.code }} · {{ t.finder.first_name|default:t.finder.username }} · {{ t.requested_at|date:"M j, g:i a" }}</small></div><a class="button button-soft button-small" href="{% url 'turn-in' t.code %}">Confirm</a></article>
+      {% empty %}<p class="muted">Nobody has said they're bringing an item.</p>{% endfor %}
+      <h3 class="sub-heading">At the guard house ({{ at_guardhouse|length }})</h3>
+      {% for p in at_guardhouse %}<article class="staff-row"><div><h3><a href="{% url 'post-detail' p.pk %}">{{ p.display_title }}</a></h3><small>Since {{ p.turned_over_at|date:"M j, Y" }}{% if p.intake %} · {{ p.intake.get_method_display }}{% endif %}</small></div></article>
+      {% empty %}<p class="muted">No items are held right now.</p>{% endfor %}
+    </section>
+    <section class="panel"><div class="section-heading"><div><span class="eyebrow">Finder requests</span><h2>Status requests ({{ status_requests|length }})</h2></div></div>
+      {% for row in status_requests %}<article class="staff-row"><div><h3><a href="{% url 'post-detail' row.post.pk %}">{{ row.post.display_title }}</a></h3><small>{{ row.requester.first_name|default:row.requester.username }} · {{ row.get_requested_status_display }} · {{ row.created_at|date:"M j" }}</small><p class="muted">{{ row.reason|truncatechars:120 }}</p></div><a class="button button-soft button-small" href="{% url 'post-detail' row.post.pk %}">Review</a></article>
+      {% empty %}<p class="muted">No pending requests.</p>{% endfor %}
+    </section>
+  </div>
   <div class="staff-columns">
     <section class="panel"><div class="section-heading"><div><span class="eyebrow">Campus listings</span><h2>Open items</h2></div></div>
       {% for post in posts %}

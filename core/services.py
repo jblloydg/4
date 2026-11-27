@@ -7,8 +7,9 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from .models import (
-    AbuseReport, ChatQuestion, ClaimApplication, Conversation, InAppNotification, ItemPost,
-    PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog, SystemSettings, VerificationQuestion,
+    AbuseReport, ChatQuestion, ClaimApplication, Conversation, GuardhouseIntake, InAppNotification, ItemPost,
+    PostStatusEvent, Profile, QuestionTemplate, StaffAuditLog, StatusChangeRequest, SystemSettings, TurnInTicket,
+    VerificationQuestion,
 )
 from .permissions import is_staff_or_admin
 
@@ -170,28 +171,135 @@ def close_claim(claim, actor=None, reason="Closed by participant"):
     return claim
 
 
+def staff_users():
+    return User.objects.filter(is_active=True).filter(
+        models.Q(profile__role__in=[Profile.Role.STAFF, Profile.Role.ADMIN]) | models.Q(is_superuser=True)
+    ).distinct()
+
+
+def ticket_for(post, finder, claim=None):
+    ticket, _ = TurnInTicket.objects.get_or_create(post=post, finder=finder, defaults={"claim": claim})
+    if claim and ticket.claim_id != claim.pk:
+        ticket.claim = claim
+        ticket.save(update_fields=["claim"])
+    return ticket
+
+
+def can_turn_in(post):
+    return post.status not in {ItemPost.Status.TURNED_OVER, ItemPost.Status.CLAIMED, ItemPost.Status.CLOSED} and not post.is_archived
+
+
 @transaction.atomic
-def turn_over_to_guardhouse(post, actor):
+def request_guardhouse(ticket, actor):
+    """Finder says they are bringing the item. Status changes only when staff receive it."""
+    ticket = TurnInTicket.objects.select_for_update().select_related("post").get(pk=ticket.pk)
+    if actor.pk != ticket.finder_id:
+        raise PermissionError("Only the finder can say they are bringing this item.")
+    if not can_turn_in(ticket.post):
+        raise ValueError("This item can't be turned in right now.")
+    if ticket.requested_at:
+        return ticket
+    ticket.requested_at = timezone.now()
+    ticket.save(update_fields=["requested_at"])
+    for staff in staff_users():
+        notify_user(staff, ticket.post, f"Item on its way to the guard house. Turn-in code {ticket.code}.")
+    return ticket
+
+
+@transaction.atomic
+def turn_over_to_guardhouse(post, actor, ticket=None, handed_over_by_user=None, handed_over_by_name="", method=GuardhouseIntake.Method.MANUAL):
+    """Staff confirm the item physically arrived. Claims and chats stay open; the
+    admin's guard-house grace days decide when the listing (and its chats) close."""
+    if not is_staff_or_admin(actor):
+        raise PermissionError("Only guard-house staff can confirm that an item was received.")
     post = ItemPost.objects.select_for_update().get(pk=post.pk)
-    record_status(post, ItemPost.Status.TURNED_OVER, actor, "Item turned over to the guard house.")
+    if post.status == ItemPost.Status.TURNED_OVER:
+        return post
+    if not can_turn_in(post):
+        raise ValueError("This item can't be turned in in its current state.")
+    if ticket is None:
+        finder = handed_over_by_user or post.author
+        ticket = TurnInTicket.objects.filter(post=post, finder=finder).first()
+    if handed_over_by_user is None and not handed_over_by_name and ticket:
+        handed_over_by_user = ticket.finder
+    record_status(post, ItemPost.Status.TURNED_OVER, actor, "Received at the guard house.")
     post.turned_over_at = timezone.now()
     post.returned_application = None
     post.save(update_fields=["turned_over_at", "returned_application", "updated_at"])
-    active_claims = list(
-        post.claims.filter(status__in=ClaimApplication.ACTIVE_STATUSES).select_related("claimant")
+    GuardhouseIntake.objects.create(
+        post=post, ticket=ticket, received_by=actor, received_at=timezone.now(),
+        handed_over_by_user=handed_over_by_user, handed_over_by_name=(handed_over_by_name or "")[:120], method=method,
     )
-    for claim in active_claims:
-        claim.status = ClaimApplication.Status.CLOSED
-        claim.closed_at = timezone.now()
-        claim.close_reason = "The item was turned over to the guard house; pickup is in person."
-        claim.save(update_fields=["status", "closed_at", "close_reason"])
-    for conversation in post.conversations.all():
-        close_conversation(conversation, "Pickup is now handled in person at the guard house.")
-    notify_claimants(
-        post,
-        "Status update: this item is now at the guard house. Online claims are closed; pickup is handled in person.",
+    if ticket:
+        ticket.received_at = timezone.now()
+        ticket.save(update_fields=["received_at"])
+    # A recorded hand-off that never completed goes back to Approved.
+    post.claims.filter(status=ClaimApplication.Status.RETURNED).update(status=ClaimApplication.Status.APPROVED)
+    settings_row = SystemSettings.current()
+    window = (
+        f" Chats stay open for {settings_row.guardhouse_grace_days} day(s)."
+        if settings_row.guardhouse_grace_days else ""
     )
+    notify_claimants(post, "Status update: this item is now at the guard house. Approved claimants pick it up in person." + window)
+    if ticket and ticket.finder_id != actor.pk:
+        notify_user(ticket.finder, post, "The guard house confirmed it received the item. Thank you!")
+    if post.author_id not in {actor.pk, ticket.finder_id if ticket else None}:
+        notify_user(post.author, post, "This item is now at the guard house.")
+    audit(actor, "guardhouse_intake", post, f"Method {method}; handed over by {handed_over_by_user or handed_over_by_name or 'unknown'}.")
     return post
+
+
+@transaction.atomic
+def request_status_change(post, actor, requested_status, reason, photo=None):
+    post = ItemPost.objects.select_for_update().get(pk=post.pk)
+    if post.status != ItemPost.Status.TURNED_OVER:
+        raise ValueError("Status requests are only needed while the item is at the guard house.")
+    if actor.pk != post.author_id and not post.turn_in_tickets.filter(finder=actor).exists():
+        raise PermissionError("Only the finder can request a status change.")
+    if not (reason or "").strip():
+        raise ValueError("Write a reason for the request.")
+    if post.status_requests.filter(requester=actor, decision=StatusChangeRequest.Decision.PENDING).exists():
+        raise ValueError("You already have a pending request for this item.")
+    request_row = StatusChangeRequest.objects.create(
+        post=post, requester=actor, requested_status=requested_status, reason=reason.strip()[:1000], photo=photo or None,
+    )
+    for staff in staff_users():
+        notify_user(staff, post, "A finder asked staff to change the status of an item at the guard house.")
+    return request_row
+
+
+@transaction.atomic
+def review_status_change(request_row, actor, approve, note=""):
+    if not is_staff_or_admin(actor):
+        raise PermissionError("Only staff can review status requests.")
+    request_row = StatusChangeRequest.objects.select_for_update().select_related("post").get(pk=request_row.pk)
+    if request_row.decision != StatusChangeRequest.Decision.PENDING:
+        return request_row
+    post = request_row.post
+    request_row.decision = StatusChangeRequest.Decision.APPROVED if approve else StatusChangeRequest.Decision.REJECTED
+    request_row.reviewed_by = actor
+    request_row.reviewed_at = timezone.now()
+    request_row.review_note = (note or "").strip()[:500]
+    request_row.save(update_fields=["decision", "reviewed_by", "reviewed_at", "review_note"])
+    if approve and post.status == ItemPost.Status.TURNED_OVER:
+        if request_row.requested_status == StatusChangeRequest.Requested.CLOSED:
+            close_post(post, actor, f"Closed at the finder's request: {request_row.reason[:150]}")
+        else:
+            active = post.claims.filter(status__in=["SUBMITTED", "APPROVED"]).exists()
+            new_status = ItemPost.Status.CLAIM_IN_PROGRESS if active else ItemPost.Status.OPEN
+            record_status(post, new_status, actor, "Item taken back from the guard house at the finder's request.")
+            post.turned_over_at = None
+            post.save(update_fields=["turned_over_at", "updated_at"])
+            GuardhouseIntake.objects.filter(post=post).delete()
+            post.turn_in_tickets.update(requested_at=None, received_at=None)
+    audit(actor, "approved_status_request" if approve else "rejected_status_request", request_row, request_row.review_note)
+    verdict = "approved" if approve else "rejected"
+    notify_user(
+        request_row.requester, post,
+        f"Staff {verdict} your status request." + (f" Note: {request_row.review_note}" if request_row.review_note else ""),
+        priority=True,
+    )
+    return request_row
 
 
 @transaction.atomic

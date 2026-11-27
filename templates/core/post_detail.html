@@ -33,7 +33,7 @@
         <p class="detail-author">Posted by <strong>{{ post.author.first_name|default:post.author.username }}</strong>{% if post.approximate_date %} · Approx. {{ post.approximate_date|date:"M j, Y" }}{% endif %}</p>
       </div>
       {% if post.description %}<div class="description-panel"><span class="eyebrow">Broad description</span><p>{{ post.description|linebreaksbr }}</p></div>{% endif %}
-      {% if post.status == "TURNED_OVER" %}<div class="form-callout guardhouse-callout"><strong>At the guard house</strong><span>Online claims are closed. Pickup is handled in person within school premises.</span></div>{% endif %}
+      {% if post.status == "TURNED_OVER" %}<div class="form-callout guardhouse-callout"><strong>At the guard house</strong><span>The item is held at the main-campus guard house. Claims and chats stay open; approved claimants pick it up in person.{% if intake and user.is_authenticated %} Received {{ intake.received_at|date:"M j, Y" }}.{% endif %}</span></div>{% endif %}
       {% if post.status == "RETURNED" and user_claim and post.returned_application_id == user_claim.pk %}
       <div class="claim-notice"><strong>Finder recorded a return to you.</strong><span>Confirm receipt after you physically have the item.</span>
         <form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary" type="submit">Confirm I received it</button></form>
@@ -50,11 +50,6 @@
           <div class="form-callout"><strong>Plan a safe hand-off</strong><span>Meet only within school premises. Find-IT does not deliver items.</span></div>
           <button class="button button-primary" type="submit">Submit private claim</button>
         </form>
-      </section>
-      {% elif post.post_type == "FOUND" and post.status == "TURNED_OVER" %}
-      <section class="claim-card">
-        <span class="eyebrow">In-person pickup</span><h2>Online claims are closed</h2>
-        <p class="muted">This item is at the guard house. Ask staff in person; the public post does not reveal the claimant’s identity.</p>
       </section>
       {% elif latest_claim %}
       <section class="claim-card">
@@ -110,26 +105,76 @@
           <hr>
           <span class="eyebrow">Manage listing</span>
           <a class="button button-soft button-full" href="{% url 'edit-post' post.pk %}">Edit post</a>
-          {% if post.post_type == "FOUND" and post.status != "TURNED_OVER" and post.status != "CLAIMED" and post.status != "CLOSED" %}
-          <form method="post" action="{% url 'turnover' post.pk %}">{% csrf_token %}<button class="button button-outline button-full" type="submit">Turn over to guard house</button></form>
+          {% if can_moderate and post.status != "TURNED_OVER" and post.status != "CLAIMED" and post.status != "CLOSED" and not post.is_archived %}
+          <details class="staff-intake"><summary class="button button-outline button-full">Confirm received at guard house</summary>
+            <form method="post" action="{% url 'turnover' post.pk %}" class="stack-form compact-form">{% csrf_token %}
+              <fieldset class="radio-set"><legend>Handed over by</legend>
+                <label><input type="radio" name="handed_over_by" value="finder" checked> The finder</label>
+                <label><input type="radio" name="handed_over_by" value="other"> Someone else: <input name="handed_over_by_name" maxlength="120" placeholder="Name"></label>
+              </fieldset>
+              <button class="button button-primary button-full" type="submit">Confirm received</button>
+            </form>
+          </details>
           {% endif %}
           {% if can_moderate and post.status == "TURNED_OVER" %}
           <form method="post" action="{% url 'claimed' post.pk %}" class="stack-form compact-form">
             {% csrf_token %}<label>Account that collected it<select name="recipient_id" required><option value="">Select student</option>{% for account in account_list %}<option value="{{ account.pk }}">{{ account.first_name|default:account.username }} · {{ account.profile.student_id|default:account.username }}</option>{% endfor %}</select></label>
-            <button class="button button-primary button-full" type="submit">Confirm witnessed pickup</button>
+            <button class="button button-primary button-full" type="submit">Release to student without an approved claim</button>
           </form>
           {% endif %}
           {% if can_moderate and post.status == "RETURNED" %}
           <form method="post" action="{% url 'claimed' post.pk %}">{% csrf_token %}<button class="button button-primary button-full" type="submit">Confirm witnessed pickup</button></form>
           {% endif %}
-          {% if post.status != "CLOSED" and post.status != "CLAIMED" %}
+          {% if post.status != "CLOSED" and post.status != "CLAIMED" %}{% if post.status != "TURNED_OVER" or can_moderate %}
           <form method="post" action="{% url 'close-post' post.pk %}" class="stack-form compact-form">
             {% csrf_token %}<label>Close reason (optional)<input name="reason" maxlength="240"></label><button class="button button-outline button-full" type="submit">Close listing</button>
           </form>
-          {% endif %}
-          <form method="post" action="{% url 'remove-post' post.pk %}">{% csrf_token %}<button class="text-action" type="submit">Remove from active listings</button></form>
+          {% endif %}{% endif %}
+          {% if post.status != "TURNED_OVER" or can_moderate %}<form method="post" action="{% url 'remove-post' post.pk %}">{% csrf_token %}<button class="text-action" type="submit">Remove from active listings</button></form>{% endif %}
         {% endif %}
       </div>
+      {% if my_ticket or can_moderate and post.status == "TURNED_OVER" or pending_status_requests %}
+      <div class="panel guardhouse-panel">
+        <span class="eyebrow">Guard house</span>
+        {% if intake and can_moderate %}<p class="fine-print">Received by {{ intake.received_by.first_name|default:intake.received_by.username }} · {{ intake.received_at|date:"M j, Y · g:i a" }} · {{ intake.get_method_display }}<br>Handed over by {{ intake.handed_over_by_label }}</p>{% endif %}
+        {% if my_ticket %}
+          {% if post.status == "TURNED_OVER" %}
+            <p class="muted">The guard house has this item. You can't change its status now, but you can ask staff to.</p>
+            {% if my_pending_request %}<div class="form-callout"><strong>Request pending</strong><span>{{ my_pending_request.get_requested_status_display }}: “{{ my_pending_request.reason|truncatechars:80 }}”</span></div>
+            {% elif status_request_form %}
+            <details><summary class="button button-outline button-full">Request a status change</summary>
+              <form method="post" action="{% url 'status-request' post.pk %}" enctype="multipart/form-data" class="stack-form compact-form">{% csrf_token %}
+                <label>{{ status_request_form.requested_status.label }}{{ status_request_form.requested_status }}</label>
+                <label>{{ status_request_form.reason.label }}{{ status_request_form.reason }}</label>
+                <label>{{ status_request_form.photo.label }}{{ status_request_form.photo }}</label>
+                <button class="button button-primary button-full" type="submit">Send to staff</button>
+              </form>
+            </details>{% endif %}
+          {% elif post.status != "CLAIMED" and post.status != "CLOSED" %}
+            {% if my_ticket.requested_at %}<p class="muted">You said you're bringing it ({{ my_ticket.requested_at|date:"M j, g:i a" }}). Show this QR or code to the guard.</p>
+            {% else %}<form method="post" action="{% url 'turnover' post.pk %}">{% csrf_token %}<button class="button button-outline button-full" type="submit">I'm bringing it to the guard house</button></form>{% endif %}
+          {% endif %}
+          {% if post.status != "CLAIMED" and post.status != "CLOSED" %}
+          <button type="button" class="button button-soft button-full" data-qr-toggle{% if not my_ticket_qr %} disabled title="Connect to the internet to load the QR"{% endif %}>Show turn-in QR</button>
+          <div class="qr-box" id="qr-box" hidden>
+            {% if my_ticket_qr %}{{ my_ticket_qr|safe }}{% endif %}
+            <p class="qr-code-text">Code <strong>{{ my_ticket.code }}</strong></p>
+            <p class="fine-print">Private: only you and staff can see this. It stays on this page if you lose internet. <a href="{% url 'ticket-qr' my_ticket.code %}">Download QR</a></p>
+          </div>
+          {% endif %}
+        {% endif %}
+        {% for row in pending_status_requests %}
+          <div class="status-request-row">
+            <strong>{{ row.requester.first_name|default:row.requester.username }} asks: {{ row.get_requested_status_display }}</strong>
+            <p>{{ row.reason }}</p>{% if row.photo %}<a href="{{ row.photo.url }}" target="_blank" rel="noopener"><img src="{{ row.photo.url }}" alt="Photo attached to the request" class="request-photo"></a>{% endif %}
+            <form method="post" action="{% url 'review-status-request' row.pk %}" class="stack-form compact-form">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}">
+              <label>Note to the finder (optional)<input name="note" maxlength="500"></label>
+              <div class="button-row"><button class="button button-small button-primary" name="decision" value="approve" type="submit">Approve</button><button class="button button-small button-outline" name="decision" value="reject" type="submit">Reject</button></div>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="panel share-panel" id="share-panel">
         <span class="eyebrow">Share</span>
         <div class="share-stats">
